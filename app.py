@@ -173,18 +173,17 @@ def open_window(url: str) -> bool:
     ]
     # 注意：这里不能用 CREATE_NO_WINDOW，否则 Edge 窗口不会显示
     _launch_browser(args)
-    if _wait_app_window(8.0):
+    # 浏览器进程已经在用本应用配置启动时，哪怕窗口还没被枚举到也不要关掉重开
+    if _wait_app_window(6.0) or _profile_pids():
         return True
-    # 第一次没出现窗口（通常是旧进程还没退干净），清掉重来一次
+    # 浏览器确实没起来，清掉单实例锁再试一次
     close_app_windows()
     _clean_profile_locks()
     _launch_browser(args)
-    if _wait_app_window(8.0):
+    if _wait_app_window(10.0) or _profile_pids():
         return True
-    if not _profile_pids():
-        webbrowser.open(url)
-        return False
-    return True
+    webbrowser.open(url)
+    return False
 
 
 def _launch_browser(args) -> bool:
