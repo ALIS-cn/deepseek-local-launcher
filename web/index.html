@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DeepSeek 本地模型启动器</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="aurora"><span></span><span></span><span></span></div>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3c4.5 0 8 3.2 8 7.2 0 3.5-2.3 6.4-5.6 7.1L12 21l-2.4-3.7C6.3 16.6 4 13.7 4 10.2 4 6.2 7.5 3 12 3Z"/>
+          <path d="M9.2 9.6h.01M14.8 9.6h.01"/>
+          <path d="M9.5 13.2c1.6 1 3.4 1 5 0"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>DeepSeek 本地模型启动器</h1>
+        <p>下载 · 启动 · 对话，全程本地运行</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="status-pill" id="status-pill" data-state="loading">
+        <i></i><span>检测中…</span>
+      </button>
+      <button class="icon-btn" id="btn-settings" aria-label="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 7h10M18 7h2M4 17h2M10 17h10"/>
+          <circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="models">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
+      <span>我的模型</span>
+    </button>
+    <button class="tab" data-view="download">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="m8 10 4 4 4-4"/><path d="M5 19h14"/></svg>
+      <span>下载模型</span>
+    </button>
+    <button class="tab" data-view="chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H7l-4 2 1.4-4.2A8 8 0 1 1 21 12Z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01"/></svg>
+      <span>对话</span>
+    </button>
+    <button class="tab" data-view="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.7 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <main>
+    <!-- ================= 我的模型 ================= -->
+    <section class="view active" id="view-models">
+      <div class="hero" id="hero-missing">
+        <div class="hero-glow"></div>
+        <div class="hero-body">
+          <span class="tag warn">需要安装运行时</span>
+          <h2>还没有检测到 Ollama</h2>
+          <p>Ollama 是本地运行 DeepSeek 模型的引擎。选择下面的版本一键下载安装，或指定电脑里已有的 ollama.exe。</p>
+          <div class="row wrap">
+            <button class="btn primary" data-install="intel">
+              <span>下载 Intel 优化版</span>
+              <small>101 MB · 国内镜像 · 支持 Intel 核显 / Arc</small>
+            </button>
+            <button class="btn" data-install="standard">
+              <span>下载标准版</span>
+              <small>1.6 GB · 国内加速镜像</small>
+            </button>
+            <button class="btn ghost" id="btn-use-existing">我已有 Ollama</button>
+          </div>
+        </div>
+        <div class="hero-art">
+          <div class="orb"></div>
+          <div class="orb small"></div>
+        </div>
+      </div>
+
+      <div class="progress-card hidden" id="install-progress">
+        <div class="progress-head">
+          <span class="progress-title">正在安装 Ollama</span>
+          <span class="progress-pct">0%</span>
+        </div>
+        <div class="bar"><i></i></div>
+        <div class="progress-meta"><span class="ptext">准备中…</span></div>
+      </div>
+
+      <div class="section-head">
+        <div>
+          <h2>已安装模型</h2>
+          <p class="muted" id="model-summary">正在加载…</p>
+        </div>
+        <button class="btn small" data-goto="download">下载新模型</button>
+      </div>
+
+      <div class="grid" id="model-grid"></div>
+
+      <div class="empty-state hidden" id="models-empty">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/><path d="m3 18 9 5 9-5"/></svg>
+        </div>
+        <h3>还没有下载任何模型</h3>
+        <p>去「下载模型」选择适合你电脑的 DeepSeek 版本，下载完成后即可离线对话。</p>
+        <button class="btn primary" data-goto="download">去下载模型</button>
+      </div>
+    </section>
+
+    <!-- ================= 下载模型 ================= -->
+    <section class="view" id="view-download">
+      <div class="mirror-banner">
+        <span class="tag good">国内镜像已启用</span>
+        <p>模型默认从 <b>ModelScope 魔搭</b> 国内镜像下载，无需科学上网；下载中断后再次点击可断点续传。</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>选择 DeepSeek 模型</h2>
+            <p class="muted">数字越大越聪明，同时对显存和内存的要求越高</p>
+          </div>
+          <span class="tag" id="catalog-count">0 个可选</span>
+        </div>
+        <div class="catalog" id="catalog-list"></div>
+        <label class="field">
+          <span>或输入其它模型名称</span>
+          <input id="custom-model" placeholder="例如 qwen3:8b、deepseek-r1:7b（自定义模型走 Ollama 官方源）">
+        </label>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>下载设置</h2>
+        </div>
+
+        <div class="field">
+          <span>模型存放目录</span>
+          <div class="dir-row">
+            <input id="model-dir" readonly>
+            <button class="btn small" id="btn-choose-dir">选择目录</button>
+            <button class="btn small ghost" id="btn-open-dir">打开</button>
+          </div>
+        </div>
+
+        <div class="switch-row">
+          <div class="switch-text">
+            <div class="switch-title">
+              <strong>Intel 显卡优化模式</strong>
+              <span class="tag good">IPEX-LLM</span>
+            </div>
+            <p class="muted">使用 Intel 优化版 Ollama（来自 ModelScope），可调用 Intel 核显 / Arc 显卡加速。切换后会自动重启 Ollama 服务。</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="intel-toggle"><span></span></label>
+        </div>
+
+        <div class="row">
+          <button class="btn primary big" id="btn-download">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="m8 10 4 4 4-4"/><path d="M5 19h14"/></svg>
+            开始下载
+          </button>
+        </div>
+
+        <div class="progress-card hidden" id="model-progress">
+          <div class="progress-head">
+            <span class="progress-title">正在下载模型</span>
+            <span class="progress-pct">0%</span>
+          </div>
+          <div class="bar"><i></i></div>
+          <div class="progress-meta"><span class="ptext">准备中…</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 对话 ================= -->
+    <section class="view" id="view-chat">
+      <div class="chat-shell">
+        <div class="chat-head">
+          <div class="chat-model">
+            <label class="muted small-label">当前模型</label>
+            <select id="chat-model"></select>
+          </div>
+          <div class="chat-model">
+            <label class="muted small-label">记忆</label>
+            <select id="chat-memory"><option value="">不使用记忆</option></select>
+          </div>
+          <div class="chat-tools">
+            <div class="seg" id="think-seg" title="思考强度">
+              <button type="button" data-think="off" title="少推理，回答更快">快速</button>
+              <button type="button" data-think="normal" class="active" title="默认思考深度">标准</button>
+              <button type="button" data-think="deep" title="更充分的推理，耗时更长">深入</button>
+            </div>
+            <button type="button" class="toggle-chip" id="web-toggle" title="开启：遇到时效性问题会自动联网检索；关闭：完全离线，不联网搜索">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"/></svg>
+              <span>联网搜索</span>
+            </button>
+            <button class="btn small ghost" id="btn-new-chat">新对话</button>
+          </div>
+        </div>
+        <div id="chat-messages" class="messages">
+          <div class="chat-welcome">
+            <div class="welcome-logo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c4.5 0 8 3.2 8 7.2 0 3.5-2.3 6.4-5.6 7.1L12 21l-2.4-3.7C6.3 16.6 4 13.7 4 10.2 4 6.2 7.5 3 12 3Z"/><path d="M9.2 9.6h.01M14.8 9.6h.01"/><path d="M9.5 13.2c1.6 1 3.4 1 5 0"/></svg>
+            </div>
+            <h3>开始和本地 DeepSeek 对话</h3>
+            <p>模型完全运行在你的电脑上，对话内容不会上传网络。</p>
+            <div class="suggest">
+              <button data-prompt="用通俗易懂的方式解释一下什么是量子纠缠">解释量子纠缠</button>
+              <button data-prompt="帮我写一个 Python 脚本，批量重命名文件夹里的图片">写一段 Python 脚本</button>
+              <button data-prompt="给我制定一个一周的健身计划，适合上班族">制定健身计划</button>
+            </div>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea id="chat-input" rows="1" placeholder="输入消息… Enter 发送 / Shift + Enter 换行"></textarea>
+          <button class="btn primary send" id="btn-send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg>
+            <span>发送</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 设置 ================= -->
+    <section class="view" id="view-settings">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Ollama 运行时</h2>
+            <p class="muted">应用会使用独立端口与模型目录，不影响系统里其它的 Ollama</p>
+          </div>
+          <span class="tag" id="set-kind">—</span>
+        </div>
+        <div class="kv"><span>运行状态</span><b id="set-status">—</b></div>
+        <div class="kv"><span>版本</span><b id="set-version">—</b></div>
+        <div class="kv"><span>程序路径</span><b class="mono ellipsis" id="set-path">—</b></div>
+        <div class="kv"><span>服务地址</span><b class="mono" id="set-host">—</b></div>
+        <div class="kv"><span>模型目录</span><b class="mono ellipsis" id="set-dir">—</b></div>
+        <div class="notice hidden" id="mode-notice"></div>
+        <div class="row wrap gap">
+          <button class="btn small" id="btn-restart">重启服务</button>
+          <button class="btn small ghost" id="btn-stop">停止服务</button>
+          <button class="btn small ghost" id="btn-log">查看日志</button>
+          <button class="btn small ghost" id="btn-reinstall-intel">安装 Intel 优化版</button>
+          <button class="btn small ghost" id="btn-reinstall-standard">安装标准版</button>
+        </div>
+        <div class="progress-card hidden" id="settings-progress">
+          <div class="progress-head">
+            <span class="progress-title">正在处理</span>
+            <span class="progress-pct">0%</span>
+          </div>
+          <div class="bar"><i></i></div>
+          <div class="progress-meta"><span class="ptext">准备中…</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Ollama 程序</h2>
+            <p class="muted">选择要使用的 ollama.exe，切换后会自动重启服务</p>
+          </div>
+        </div>
+        <div class="field">
+          <span>当前使用的程序</span>
+          <div class="dir-row">
+            <input id="ollama-exe-path" readonly>
+            <button class="btn small" id="btn-choose-ollama">选择本机 Ollama</button>
+            <button class="btn small ghost" id="btn-use-bundled">用内置版本</button>
+          </div>
+          <small class="muted" id="ollama-exe-hint">「用内置版本」会恢复使用应用自动检测/内置安装的 Ollama。</small>
+        </div>
+        <div class="field">
+          <span>检测到的 Ollama</span>
+          <select id="ollama-candidates"></select>
+          <div class="row" style="margin-top:8px">
+            <button class="btn small" id="btn-apply-ollama">确定使用</button>
+            <button class="btn small ghost" id="btn-open-runtime">打开存放目录</button>
+          </div>
+          <small class="muted" id="ollama-apply-hint">选好后点「确定使用」才会切换（服务会自动重启）。</small>
+        </div>
+        <div class="field">
+          <span>Ollama 存放目录</span>
+          <input id="ollama-runtime-dir" readonly>
+          <small class="muted">每个版本单独放一个文件夹，重装或升级应用都不会被删掉。</small>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>对话参数</h2>
+        <div class="field">
+          <span>上下文长度（num_ctx）</span>
+          <input id="num-ctx" type="number" min="2048" step="1024">
+          <small class="muted">越大越能记住更长的对话，但会占用更多内存。推荐 8192。</small>
+        </div>
+        <div class="row"><button class="btn small" id="btn-save-ctx">保存</button></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>显存管理</h2>
+            <p class="muted">切换或停止模型时主动释放显存，让下一个模型加载更快</p>
+          </div>
+        </div>
+        <div class="switch-row">
+          <div class="switch-text">
+            <div class="switch-title"><strong>切换模型时自动重启 Ollama</strong></div>
+            <p class="muted">切换模型时自动重启 Ollama 服务，彻底释放上一个模型占用的显存，让新模型加载更快。</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="restart-switch-toggle"><span></span></label>
+        </div>
+        <div class="switch-row">
+          <div class="switch-text">
+            <div class="switch-title"><strong>切换模型时释放显存</strong></div>
+            <p class="muted">未重启服务时，切换到新模型前先卸载已加载的模型，避免两个模型同时占用显存。</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="release-switch-toggle"><span></span></label>
+        </div>
+        <div class="switch-row">
+          <div class="switch-text">
+            <div class="switch-title"><strong>停止服务时释放显存</strong></div>
+            <p class="muted">停止 Ollama 前先卸载所有模型，确保显存被完全释放。</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="release-stop-toggle"><span></span></label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>记忆</h2>
+            <p class="muted">把重要信息长期保存在记忆文件中，对话时注入给模型参考</p>
+          </div>
+        </div>
+        <div class="field">
+          <span>记忆存放目录</span>
+          <div class="dir-row">
+            <input id="memory-dir" readonly>
+            <button class="btn small" id="btn-choose-memory-dir">选择目录</button>
+            <button class="btn small ghost" id="btn-open-memory-dir">打开</button>
+          </div>
+        </div>
+        <div class="switch-row">
+          <div class="switch-text">
+            <div class="switch-title">
+              <strong>自动保留记忆</strong>
+              <span class="tag" id="auto-mem-tag">关闭</span>
+            </div>
+            <p class="muted">对话结束后，自动让模型提取关键信息并追加到当前所选记忆文件。</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="auto-memory-toggle"><span></span></label>
+        </div>
+        <div class="memory-manage">
+          <div class="memory-manage-head">
+            <strong>记忆文件</strong>
+            <button class="btn small" id="btn-new-memory">新建记忆</button>
+          </div>
+          <div class="memory-list" id="memory-list">
+            <div class="muted">加载中…</div>
+          </div>
+        </div>
+        <div class="row"><button class="btn small" id="btn-save-memory-cfg">保存记忆设置</button></div>
+      </div>
+
+      <div class="panel about">
+        <h2>关于</h2>
+        <p class="muted">DeepSeek 本地模型启动器 <b>v<span id="app-version">1.0.0</span></b></p>
+        <p class="muted">模型与运行环境均保存在本地。配置在 <span class="mono">data/</span>，Ollama 与日志在 <span class="mono">runtime/</span>。</p>
+        <div class="row"><button class="btn small ghost danger" id="btn-quit">退出应用</button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<div class="modal-mask hidden" id="dir-mask">
+  <div class="modal dir-modal">
+    <div class="dir-modal-head">
+      <div>
+        <h3>选择模型存放目录</h3>
+        <p class="muted">模型文件较大，建议选择空间充足的磁盘</p>
+      </div>
+      <button class="icon-btn tiny" id="dir-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="dir-drives" id="dir-drives"></div>
+    <div class="dir-path mono" id="dir-path">—</div>
+    <div class="dir-list" id="dir-list"></div>
+    <div class="dir-newrow hidden" id="dir-newrow">
+      <input id="dir-newname" placeholder="输入新文件夹名称">
+      <button class="btn small" id="dir-create">创建</button>
+    </div>
+    <div class="dir-modal-foot">
+      <span class="muted" id="dir-free"></span>
+      <div class="row tight">
+        <button class="btn small ghost" id="dir-new">新建文件夹</button>
+        <button class="btn small ghost" id="dir-up">上一级</button>
+        <button class="btn small primary" id="dir-pick">选择此文件夹</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask hidden" id="modal-mask">
+  <div class="modal">
+    <h3 id="modal-title">确认</h3>
+    <p id="modal-text"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modal-cancel">取消</button>
+      <button class="btn primary" id="modal-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask hidden" id="memory-mask">
+  <div class="modal memory-modal">
+    <div class="memory-modal-head">
+      <h3 id="memory-edit-title">编辑记忆</h3>
+      <button class="icon-btn tiny" id="memory-close" aria-label="关闭">✕</button>
+    </div>
+    <textarea id="memory-edit-content" placeholder="在此输入记忆内容，对话时会注入给模型参考…"></textarea>
+    <div class="modal-actions">
+      <button class="btn ghost" id="memory-cancel">取消</button>
+      <button class="btn primary" id="memory-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
