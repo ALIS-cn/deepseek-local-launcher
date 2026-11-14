@@ -78,12 +78,17 @@ function toast(message, type = "") {
   }, 3200);
 }
 
+function tokenHeaders() {
+  const token = window.__DS_TOKEN__ || "";
+  return token ? { "X-DS-Token": token } : {};
+}
+
 async function api(path, body) {
   const isRead = body === undefined
     && (path.startsWith("/api/fs") || path === "/api/state" || path === "/api/models");
   const options = isRead ? {} : {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...tokenHeaders() },
     body: JSON.stringify(body || {}),
   };
   let resp;
@@ -164,6 +169,7 @@ function render() {
 
   renderModels(models);
   renderCatalog();
+  renderHardware();
   renderSelectors(models);
   renderMemories(S.state.memories || []);
   renderSettings();
@@ -205,17 +211,56 @@ function renderModels(models) {
   });
 }
 
+function modelVramGB(item) {
+  const match = String(item && item.vram ? item.vram : "").match(/([\d.]+)\s*GB/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function bestFitModel(maxVram) {
+  if (!maxVram) return null;
+  let fit = null;
+  S.catalog.forEach((m) => {
+    const need = modelVramGB(m);
+    if (need && need <= maxVram && (!fit || need > modelVramGB(fit))) fit = m;
+  });
+  return fit;
+}
+
+function renderHardware() {
+  const banner = $("#hw-banner");
+  if (!banner) return;
+  const hw = (S.state && S.state.hardware) || { gpus: [], maxVramGB: 0 };
+  const gpu = (hw.gpus || [])[0];
+  if (!gpu) {
+    banner.classList.add("hidden");
+    return;
+  }
+  banner.classList.remove("hidden");
+  const fit = bestFitModel(hw.maxVramGB || 0);
+  const vram = gpu.vramGB ? ` · 约 ${gpu.vramGB} GB 显存` : "";
+  $("#hw-text").innerHTML = `检测到 <b>${escapeHtml(gpu.name)}</b>${escapeHtml(vram)}`
+    + (fit
+      ? `，按显存推荐 <b>${escapeHtml(prettyName(fit.name))}</b>（建议显存 ${escapeHtml(fit.vram)}）`
+      : "，显存信息不足，建议从较小的模型开始试");
+}
+
 function renderCatalog() {
   const box = $("#catalog-list");
   box.innerHTML = "";
+  const hw = (S.state && S.state.hardware) || {};
+  const fit = bestFitModel(hw.maxVramGB || 0);
   S.catalog.forEach((m) => {
     const card = document.createElement("div");
     card.className = "catalog-card" + (S.selected === m.name ? " selected" : "");
+    const fitTag = fit && fit.name === m.name
+      ? '<div class="c-fit">适合你的显卡</div>'
+      : "";
     card.innerHTML = `
       <div class="c-check">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-11"/></svg>
       </div>
       <div class="c-name">${escapeHtml(m.name)}</div>
+      ${fitTag}
       <div class="c-note">${escapeHtml(m.note || "")}</div>
       <div class="c-foot">
         <span class="c-left">
@@ -341,6 +386,10 @@ function renderSettings() {
       tag.className = "tag" + (cfg.autoMemory ? " good" : "");
     }
   }
+  const updateToggle = $("#check-update-toggle");
+  if (updateToggle) updateToggle.checked = !!cfg.checkUpdate;
+  const updateCurrent = $("#update-current");
+  if (updateCurrent) updateCurrent.textContent = S.state.version || "—";
 
   const notice = $("#mode-notice");
   if (ol.installed && ol.modeMismatch) {
@@ -475,6 +524,92 @@ function handleEvent(ev) {
       $("#btn-download").disabled = false;
     }
   }
+  if (ev.task === "update") {
+    paintProgress($("#update-progress"), ev);
+    if (ev.status === "installing") toast(ev.message, "ok");
+    if (ev.status === "error") {
+      toast(ev.message, "error");
+      $("#update-ok").disabled = false;
+      $("#update-cancel").disabled = false;
+    }
+  }
+}
+
+/* ===================== 在线更新 ===================== */
+let updateInfo = null;
+
+async function checkUpdate(manual) {
+  if (manual) toast("正在检查更新…");
+  try {
+    const res = await api("/api/update/check", {});
+    if (!res.hasUpdate) {
+      if (manual) toast(`已是最新版本 v${res.current}`, "ok");
+      return;
+    }
+    updateInfo = res;
+    $("#update-title").textContent = `发现新版本 v${res.latest}`;
+    $("#update-text").innerHTML =
+      `当前版本 v${escapeHtml(res.current)} → 新版本 <b>v${escapeHtml(res.latest)}</b><br>`
+      + `安装包会通过国内加速节点下载，下载完成后自动启动安装程序，应用会退出。`;
+    $("#update-progress").classList.add("hidden");
+    $("#update-ok").disabled = false;
+    $("#update-cancel").disabled = false;
+    $("#update-cancel").textContent = "稍后再说";
+    $("#update-mask").classList.remove("hidden");
+  } catch (err) {
+    if (manual) toast(err.message, "error");
+  }
+}
+
+async function installUpdate() {
+  if (!updateInfo) return;
+  $("#update-ok").disabled = true;
+  $("#update-cancel").disabled = true;
+  $("#update-cancel").textContent = "下载中…";
+  $("#update-progress").classList.remove("hidden");
+  $(".progress-title", $("#update-progress")).textContent = `正在下载 v${updateInfo.latest}`;
+  try {
+    await api("/api/update/install", { version: updateInfo.latest });
+  } catch (err) {
+    toast(err.message, "error");
+    $("#update-ok").disabled = false;
+    $("#update-cancel").disabled = false;
+    $("#update-cancel").textContent = "稍后再说";
+  }
+}
+
+/* ===================== 首次启动引导 ===================== */
+function maybeShowGuide() {
+  if (!S.state || !S.state.config) return;
+  if (S.state.config.firstRunDone) return;
+  $("#guide-mask").classList.remove("hidden");
+  api("/api/config", { firstRunDone: true }).catch(() => {});
+}
+
+/* ===================== 对话导出 ===================== */
+function exportChat() {
+  if (!Chat.messages.length) {
+    toast("当前还没有对话内容", "error");
+    return;
+  }
+  const lines = ["# DeepSeek 本地对话", "", `> 模型：${Chat.model || "未知"}`, ""];
+  Chat.messages.forEach((m) => {
+    const role = m.role === "user" ? "我" : "助手";
+    const parsed = m.role === "assistant"
+      ? splitThinking(m.content || "")
+      : { thinking: "", content: m.content || "" };
+    lines.push(`## ${role}`, "");
+    if (parsed.thinking) lines.push("> 思考过程：", "", parsed.thinking, "");
+    lines.push(parsed.content || "", "");
+  });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `deepseek-chat-${stamp}.md`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+  toast("已导出当前对话", "ok");
 }
 
 /* ===================== 安装 / 下载 ===================== */
@@ -1009,7 +1144,7 @@ async function streamReply(history) {
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...tokenHeaders() },
       body: JSON.stringify({
         model: Chat.model,
         messages: history,
@@ -1495,6 +1630,40 @@ function bind() {
   });
   $("#btn-new-memory").addEventListener("click", newMemory);
 
+  // 在线更新
+  $("#btn-check-update").addEventListener("click", () => checkUpdate(true));
+  $("#check-update-toggle").addEventListener("change", async (e) => {
+    try {
+      await api("/api/config", { checkUpdate: e.target.checked });
+      toast(e.target.checked ? "已开启：启动时检查更新" : "已关闭：启动时检查更新", "ok");
+      debouncedRefresh(300);
+    } catch (err) { toast(err.message, "error"); e.target.checked = !e.target.checked; }
+  });
+  $("#update-ok").addEventListener("click", installUpdate);
+  $("#update-cancel").addEventListener("click", () => {
+    $("#update-mask").classList.add("hidden");
+    $("#update-cancel").disabled = false;
+  });
+
+  // 首次启动引导
+  $("#guide-ok").addEventListener("click", () => {
+    $("#guide-mask").classList.add("hidden");
+  });
+  $("#guide-settings").addEventListener("click", () => {
+    $("#guide-mask").classList.add("hidden");
+    showView("settings");
+  });
+
+  // 导出对话 / 快捷键
+  $("#btn-export-chat").addEventListener("click", exportChat);
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey
+      && (e.key === "n" || e.key === "N") && !e.isComposing) {
+      e.preventDefault();
+      $("#btn-new-chat").click();
+    }
+  });
+
   // 记忆编辑弹窗
   $("#memory-close").addEventListener("click", closeMemoryEditor);
   $("#memory-cancel").addEventListener("click", closeMemoryEditor);
@@ -1539,6 +1708,10 @@ async function init() {
   renderChatAll();
   autoGrow($("#chat-input"));
   updateSendBtn();
+  maybeShowGuide();
+  if (S.state && S.state.config && S.state.config.checkUpdate) {
+    setTimeout(() => checkUpdate(false), 1500);
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);

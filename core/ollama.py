@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Ollama 检测、下载安装、服务管理与模型拉取（国内镜像优先）"""
+import hashlib
 import json
 import os
 import re
@@ -72,6 +73,47 @@ INSTALL_SOURCES = {
 MODELSCOPE_FILE_URL = (
     "https://www.modelscope.cn/models/{repo}/resolve/master/{file}"
 )
+MODELSCOPE_FILES_API = (
+    "https://www.modelscope.cn/api/v1/models/{repo}/repo/files"
+    "?Revision=master&Recursive=true"
+)
+
+
+def modelscope_file_meta(repo: str, filename: str):
+    """从 ModelScope 查询文件大小与 sha256，用于下载前预检、导入前校验。"""
+    try:
+        req = urllib.request.Request(
+            MODELSCOPE_FILES_API.format(repo=repo),
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception:
+        return 0, ""
+    for item in (data.get("Data") or {}).get("Files") or []:
+        if item.get("Name") == filename and (item.get("Type") or "blob") == "blob":
+            try:
+                size = int(item.get("Size") or 0)
+            except Exception:
+                size = 0
+            return size, str(item.get("Sha256") or "")
+    return 0, ""
+
+
+def sha256_file(path: Path, on_progress=None, chunk: int = 1024 * 1024 * 4) -> str:
+    digest = hashlib.sha256()
+    total = path.stat().st_size
+    done = 0
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(chunk)
+            if not block:
+                break
+            digest.update(block)
+            done += len(block)
+            if on_progress:
+                on_progress(done, total)
+    return digest.hexdigest()
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -1030,11 +1072,18 @@ class OllamaManager:
         tmp_dir = self.model_dir / ".import-tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         gguf = tmp_dir / filename
+        # 从镜像查文件大小与 sha256：用于下载前预检和导入前校验
+        expected_size, expected_sha = modelscope_file_meta(repo, filename)
+        if gguf.exists() and expected_size and gguf.stat().st_size != expected_size:
+            try:
+                gguf.unlink()
+            except Exception:
+                pass
         # 目录中已有完整文件时直接导入
         download_needed = not gguf.exists() or gguf.stat().st_size == 0
         if download_needed:
             # 下载前先确认磁盘空间（下载 + 导入复制，按 2.2 倍预留）
-            need = parse_size(entry.get("size"))
+            need = expected_size or parse_size(entry.get("size"))
             if need:
                 self._check_space(int(need * 2.2) + 512 * 1024 * 1024)
         if not download_needed:
@@ -1077,6 +1126,49 @@ class OllamaManager:
                 },
             )
             download_file(url, gguf, on_dl, resume=True)
+
+        # 导入前校验文件完整，避免镜像文件损坏导致 ollama create 失败
+        if expected_size and gguf.stat().st_size != expected_size:
+            try:
+                gguf.unlink()
+            except Exception:
+                pass
+            raise RuntimeError("模型文件大小与镜像不一致，已删除，请重新下载")
+        if expected_sha:
+            self.hub.publish(
+                "model",
+                {
+                    "status": "importing",
+                    "percent": 100,
+                    "model": model,
+                    "message": "正在校验文件完整性…",
+                },
+            )
+            last_v = [0.0]
+
+            def on_verify(done, total):
+                now = time.time()
+                if now - last_v[0] < 0.6 and done != total:
+                    return
+                last_v[0] = now
+                pct = int(done * 100 / total) if total else 0
+                self.hub.publish(
+                    "model",
+                    {
+                        "status": "importing",
+                        "percent": 100,
+                        "model": model,
+                        "message": f"正在校验文件完整性… {pct}%",
+                    },
+                )
+
+            actual = sha256_file(gguf, on_verify)
+            if actual.lower() != expected_sha.lower():
+                try:
+                    gguf.unlink()
+                except Exception:
+                    pass
+                raise RuntimeError("模型文件校验失败（sha256 不一致），已删除，请重新下载")
 
         self.hub.publish(
             "model",

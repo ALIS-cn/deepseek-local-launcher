@@ -5,10 +5,12 @@ import mimetypes
 import os
 import queue
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,9 +20,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .catalog import CATALOG
-from .config import APP_DIR, RESOURCE_DIR, Config, read_version
+from .config import APP_DIR, DATA_DIR, RESOURCE_DIR, Config, read_version
+from .hardware import gpu_summary
 from .ollama import SERVE_LOG, friendly_error
 from .search import build_material, is_chitchat, search_web
+from . import updater
 
 WEB_DIR = (RESOURCE_DIR / "web").resolve()
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -30,7 +34,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 def memory_dir(cfg) -> Path:
     raw = str(cfg.get("memoryDir") or "").strip()
     if not raw:
-        raw = str(APP_DIR / "data" / "memories")
+        raw = str(DATA_DIR / "memories")
     return Path(raw)
 
 
@@ -117,6 +121,18 @@ class AppContext:
         self.version = read_version()
         self.quit_event = threading.Event()
         self.window = None  # 原生窗口（pywebview），由 app.py 注入
+        # 本机接口令牌：只有本应用页面拿得到，防止其它程序随意调用
+        self.token = secrets.token_urlsafe(24)
+        self._hardware = None
+        self._update_lock = threading.Lock()
+
+    def hardware(self) -> dict:
+        if self._hardware is None:
+            try:
+                self._hardware = gpu_summary()
+            except Exception:
+                self._hardware = {"gpus": [], "maxVramGB": 0}
+        return self._hardware
 
     def close_window(self):
         """关闭原生窗口；没有窗口时只设置退出标记。"""
@@ -147,6 +163,8 @@ def build_state(app: AppContext) -> dict:
             "ollamaPath": str(app.cfg.get("ollamaPath") or ""),
             "memoryDir": app.cfg.get("memoryDir"),
             "autoMemory": bool(app.cfg.get("autoMemory")),
+            "checkUpdate": bool(app.cfg.get("checkUpdate")),
+            "firstRunDone": bool(app.cfg.get("firstRunDone")),
         },
         "ollama": st,
         "ollamaCandidates": [
@@ -156,6 +174,7 @@ def build_state(app: AppContext) -> dict:
         "memories": list_memories(app.cfg),
         "tasks": dict(app.hub.state),
         "catalog": CATALOG,
+        "hardware": app.hardware(),
         "running": st["serveRunning"],
         "logPath": str(SERVE_LOG) if SERVE_LOG.exists() else "",
     }
@@ -338,6 +357,9 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_file():
             return self._fail("文件不存在", 404)
         data = target.read_bytes()
+        if target.name == "index.html":
+            # 把本机接口令牌写进页面，前端请求时带回
+            data = data.replace(b"__DS_TOKEN_VALUE__", self.app.token.encode("utf-8"))
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
             ctype += "; charset=utf-8"
@@ -393,9 +415,15 @@ class Handler(BaseHTTPRequestHandler):
             ctype = (self.headers.get("Content-Type") or "").lower()
             if "application/json" not in ctype:
                 return self._fail("请求格式不正确", 415)
+            if self.headers.get("X-DS-Token") != self.app.token:
+                return self._fail("请求令牌无效，请刷新页面后重试", 403)
             if path == "/api/chat":
                 return self._chat()
             body = self._read_json()
+            if path == "/api/update/check":
+                return self._update_check()
+            if path == "/api/update/install":
+                return self._update_install(body)
             if path == "/api/config":
                 return self._config(body)
             if path == "/api/memories":
@@ -592,12 +620,101 @@ class Handler(BaseHTTPRequestHandler):
             if value != cfg.get("memoryDir"):
                 cfg.update(memoryDir=value)
                 changed.append("memoryDir")
+        if "checkUpdate" in body:
+            value = bool(body.get("checkUpdate"))
+            if value != bool(cfg.get("checkUpdate")):
+                cfg.update(checkUpdate=value)
+                changed.append("checkUpdate")
+        if "firstRunDone" in body:
+            value = bool(body.get("firstRunDone"))
+            if value != bool(cfg.get("firstRunDone")):
+                cfg.update(firstRunDone=value)
+                changed.append("firstRunDone")
         if need_restart:
             self.app.manager.detect()
             if self.app.manager.status()["installed"]:
                 self.app.manager.stop()
                 threading.Thread(target=self._safe_start, daemon=True).start()
         return self._send_json({"ok": True, "config": build_state(self.app)["config"]})
+
+    # ---------- 在线更新 ----------
+    def _update_check(self):
+        try:
+            info = updater.latest_release()
+        except Exception as e:
+            return self._fail(friendly_error(e))
+        current = self.app.version
+        has_update = updater.parse_version(info["version"]) > updater.parse_version(current)
+        return self._send_json(
+            {
+                "ok": True,
+                "current": current,
+                "latest": info["version"],
+                "tag": info["tag"],
+                "hasUpdate": has_update,
+                "url": info["url"],
+                "notes": (info.get("body") or "")[:2000],
+            }
+        )
+
+    def _update_install(self, body):
+        version = str(body.get("version") or "").strip().lstrip("vV")
+        if not re.fullmatch(r"\d+(\.\d+){1,3}", version):
+            return self._fail("版本号无效")
+        if not self.app._update_lock.acquire(blocking=False):
+            return self._fail("已有更新任务在进行")
+        threading.Thread(target=self._run_update, args=(version,), daemon=True).start()
+        return self._send_json({"ok": True})
+
+    def _run_update(self, version: str):
+        try:
+            dest = Path(tempfile.gettempdir()) / updater.installer_name(version)
+            last = [0.0]
+
+            def on_progress(done, total, speed):
+                now = time.time()
+                if now - last[0] < 0.4 and done != total:
+                    return
+                last[0] = now
+                percent = int(done * 100 / total) if total else 0
+                self.app.hub.publish(
+                    "update",
+                    {
+                        "status": "downloading",
+                        "percent": percent,
+                        "message": updater.progress_message(done, total, speed),
+                    },
+                )
+
+            self.app.hub.publish(
+                "update",
+                {"status": "downloading", "percent": 0, "message": "正在连接国内下载节点…"},
+            )
+            node = updater.download_installer(version, dest, on_progress)
+            self.app.hub.publish(
+                "update",
+                {
+                    "status": "installing",
+                    "percent": 100,
+                    "message": "下载完成（"
+                    + ("国内加速节点" if node != "official" else "GitHub 官方")
+                    + "），正在启动安装程序…",
+                },
+            )
+            subprocess.Popen([str(dest)])
+            time.sleep(1.0)
+            self.app.quit_event.set()
+            threading.Thread(target=self.app.close_window, daemon=True).start()
+        except Exception as e:
+            self.app.hub.publish(
+                "update",
+                {"status": "error", "percent": 0, "message": friendly_error(e)},
+            )
+        finally:
+            try:
+                self.app._update_lock.release()
+            except Exception:
+                pass
 
     def _memories(self, body):
         action = str(body.get("action") or "list").strip()

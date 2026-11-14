@@ -298,6 +298,7 @@ select option { background: #111a2c; color: var(--text); }
   box-shadow: 0 0 0 1px rgba(77, 107, 254, 0.5), 0 16px 40px rgba(77, 107, 254, 0.22);
 }
 .catalog-card .c-name { font-size: 16px; font-weight: 700; }
+.catalog-card .c-fit { font-size: 11px; font-weight: 600; color: #7ee2b8; margin-top: 6px; }
 .catalog-card .c-note { font-size: 12.5px; color: var(--muted); margin-top: 7px; line-height: 1.55; min-height: 38px; }
 .catalog-card .c-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
 .catalog-card .c-size { font-size: 13px; color: #a9b6d6; font-weight: 600; }

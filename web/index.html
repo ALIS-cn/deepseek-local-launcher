@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DeepSeek 本地模型启动器</title>
+<script>window.__DS_TOKEN__ = "__DS_TOKEN_VALUE__";</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -119,6 +120,11 @@
         <p>模型默认从 <b>ModelScope 魔搭</b> 国内镜像下载，无需科学上网；下载中断后再次点击可断点续传。</p>
       </div>
 
+      <div class="mirror-banner hidden" id="hw-banner">
+        <span class="tag" id="hw-tag">显卡</span>
+        <p id="hw-text"></p>
+      </div>
+
       <div class="panel">
         <div class="panel-head">
           <div>
@@ -200,6 +206,7 @@
               <span>联网搜索</span>
             </button>
             <button class="btn small ghost" id="btn-new-chat">新对话</button>
+            <button class="btn small ghost" id="btn-export-chat" title="导出当前对话为 Markdown">导出</button>
           </div>
         </div>
         <div id="chat-messages" class="messages">
@@ -334,6 +341,26 @@
       <div class="panel">
         <div class="panel-head">
           <div>
+            <h2>更新</h2>
+            <p class="muted">检查 GitHub 上的新版本，安装包走国内加速节点下载</p>
+          </div>
+          <span class="tag" id="update-tag">v<span id="update-current">—</span></span>
+        </div>
+        <div class="switch-row">
+          <div class="switch-text">
+            <div class="switch-title"><strong>启动时检查更新</strong></div>
+            <p class="muted">开启后每次启动会查询一次最新版本，有新版本时弹窗询问是否更新；默认关闭。</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="check-update-toggle"><span></span></label>
+        </div>
+        <div class="row">
+          <button class="btn small" id="btn-check-update">立即检查更新</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
             <h2>记忆</h2>
             <p class="muted">把重要信息长期保存在记忆文件中，对话时注入给模型参考</p>
           </div>
@@ -371,7 +398,7 @@
       <div class="panel about">
         <h2>关于</h2>
         <p class="muted">DeepSeek 本地模型启动器 <b>v<span id="app-version">1.0.0</span></b></p>
-        <p class="muted">模型与运行环境均保存在本地。配置在 <span class="mono">data/</span>，Ollama 与日志在 <span class="mono">runtime/</span>。</p>
+        <p class="muted">模型与运行环境均保存在本地。配置与记忆在 <span class="mono">%LOCALAPPDATA%\DeepSeekLauncher\data</span>，Ollama 运行时在同目录的 <span class="mono">runtimes</span> 下，重装应用不会丢失。</p>
         <div class="row"><button class="btn small ghost danger" id="btn-quit">退出应用</button></div>
       </div>
     </section>
@@ -428,6 +455,40 @@
     <div class="modal-actions">
       <button class="btn ghost" id="memory-cancel">取消</button>
       <button class="btn primary" id="memory-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask hidden" id="update-mask">
+  <div class="modal">
+    <h3 id="update-title">发现新版本</h3>
+    <p id="update-text"></p>
+    <div class="progress-card hidden" id="update-progress">
+      <div class="progress-head">
+        <span class="progress-title">正在下载更新</span>
+        <span class="progress-pct">0%</span>
+      </div>
+      <div class="bar"><i></i></div>
+      <div class="progress-meta"><span class="ptext">准备中…</span></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="update-cancel">取消</button>
+      <button class="btn primary" id="update-ok">下载并安装</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask hidden" id="guide-mask">
+  <div class="modal">
+    <h3>三步开始使用</h3>
+    <p id="guide-text">
+      1. 到「设置」安装 Ollama 运行时（Intel 显卡建议选 Intel 优化版）<br>
+      2. 到「下载模型」按显卡建议选择模型并下载<br>
+      3. 回到「对话」开始本地聊天，全程不联网也能用
+    </p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="guide-settings">去设置安装 Ollama</button>
+      <button class="btn primary" id="guide-ok">知道了</button>
     </div>
   </div>
 </div>

@@ -311,6 +311,56 @@ def window_geometry():
     return width, height, min_size
 
 
+_WEBVIEW2_KEYS = (
+    r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"
+    r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+    r"SOFTWARE\Microsoft\EdgeUpdate\Clients"
+    r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+)
+
+
+def webview2_version() -> str:
+    """检测 WebView2 运行时版本（未安装时返回空串）。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+
+        for path in _WEBVIEW2_KEYS:
+            for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    with winreg.OpenKey(root, path) as key:
+                        value = str(winreg.QueryValueEx(key, "pv")[0] or "")
+                        if value and value != "0.0.0.0":
+                            return value
+                except OSError:
+                    continue
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_webview2():
+    """首次启动缺少 WebView2 时提示安装，避免只得到浏览器窗口。"""
+    if os.name != "nt" or webview2_version():
+        return
+    try:
+        import ctypes
+
+        text = (
+            "未检测到 Microsoft Edge WebView2 运行时。\n\n"
+            "缺少它时应用只能用浏览器窗口打开，无法使用独立窗口。\n"
+            "点「确定」打开 WebView2 下载页安装（装完重新打开应用即可），"
+            "点「取消」则继续以浏览器窗口运行。"
+        )
+        box = ctypes.windll.user32.MessageBoxW
+        choice = box(None, text, APP_TITLE, 0x00000001 | 0x00000040)  # OKCANCEL | ICONINFORMATION
+        if choice == 1:
+            webbrowser.open("https://go.microsoft.com/fwlink/p/?LinkId=2124703")
+    except Exception:
+        pass
+
+
 def _set_splash(app, pct: int, text: str):
     win = getattr(app, "window", None)
     if win is None:
@@ -436,6 +486,7 @@ def main():
 
     native = False
     if not args.no_window:
+        ensure_webview2()
         native = run_desktop(app, manager, port, url)
         if not native:
             open_window(url)
