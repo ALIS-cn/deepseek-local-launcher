@@ -1243,7 +1243,30 @@ class OllamaManager:
             data=json.dumps({"model": model, "stream": True}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
+        # Ollama 按「层」推送进度，每层只有自己的 total/completed；
+        # 这里按层累计，算出整体进度，避免百分比反复归零
+        layers = {}
+        order = []
         last_pub = 0.0
+        last_percent = 0
+        last_total = 0
+
+        def emit(percent, message, force=False):
+            nonlocal last_pub
+            now = time.time()
+            if not force and now - last_pub < 0.35:
+                return
+            last_pub = now
+            self.hub.publish(
+                "model",
+                {
+                    "status": "pulling",
+                    "percent": percent,
+                    "model": model,
+                    "message": message,
+                },
+            )
+
         with urllib.request.urlopen(req, timeout=120) as r:
             for raw in r:
                 line = raw.decode("utf-8", "replace").strip()
@@ -1255,25 +1278,59 @@ class OllamaManager:
                     continue
                 if obj.get("error"):
                     raise RuntimeError(obj["error"])
-                status = obj.get("status", "")
-                total = obj.get("total") or 0
-                completed = obj.get("completed") or 0
-                percent = int(completed * 100 / total) if total else 0
-                now = time.time()
-                if now - last_pub < 0.35 and status != "success":
-                    continue
-                last_pub = now
-                self.hub.publish(
-                    "model",
-                    {
-                        "status": "pulling",
-                        "percent": percent,
-                        "model": model,
-                        "message": self._status_text(status, completed, total, percent),
-                    },
-                )
+
+                status = str(obj.get("status") or "")
                 if status == "success":
+                    emit(100, "下载完成", force=True)
                     break
+
+                if status.startswith("verifying"):
+                    emit(last_percent, "下载完成，正在校验文件…")
+                    continue
+
+                if status in ("writing manifest", "removing any unused layers"):
+                    emit(last_percent, self._status_text(status, 0, 0, last_percent))
+                    continue
+
+                if status.startswith("pulling") and status != "pulling manifest":
+                    digest = str(obj.get("digest") or status.split(" ", 1)[-1])
+                    try:
+                        total = int(obj.get("total") or 0)
+                    except Exception:
+                        total = 0
+                    try:
+                        completed = int(obj.get("completed") or 0)
+                    except Exception:
+                        completed = 0
+                    # 配置/模板之类的小层不参与整体百分比，否则会瞬间 100%
+                    if total >= 1024 * 1024:
+                        current = layers.get(digest)
+                        if current is None:
+                            layers[digest] = {"total": total, "completed": completed}
+                            order.append(digest)
+                        else:
+                            current["total"] = max(current["total"], total)
+                            current["completed"] = max(current["completed"], completed)
+                        done = sum(item["completed"] for item in layers.values())
+                        sum_total = sum(item["total"] for item in layers.values())
+                        percent = int(done * 100 / sum_total) if sum_total else last_percent
+                        # 同一批层的进度只增不减；新增层（总量变大）时才允许重算
+                        if sum_total == last_total:
+                            percent = max(percent, last_percent)
+                        percent = min(99, percent)
+                        last_percent, last_total = percent, sum_total
+                        index = order.index(digest) + 1
+                        suffix = f" · 第 {index} 个文件" if len(layers) > 1 else ""
+                        emit(
+                            percent,
+                            f"官方源下载中 {fmt_size(done)} / {fmt_size(sum_total)}"
+                            f"（{percent}%）{suffix}",
+                        )
+                    elif not layers:
+                        emit(last_percent, "正在准备模型文件…")
+                    continue
+
+                emit(last_percent, self._status_text(status, 0, 0, last_percent))
 
     @staticmethod
     def _status_text(status: str, completed, total, percent) -> str:
