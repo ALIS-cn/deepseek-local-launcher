@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 运行时数据
+build/
+dist/
+data/
+models/
+runtime/
+.screenshots/
+
+# 日志与临时文件
+*.log
+*.tmp
+*.part
+
+# 编辑器
+.vscode/
+.idea/
