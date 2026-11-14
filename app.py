@@ -147,7 +147,8 @@ def focus_app_window() -> bool:
         return False
 
 
-def open_window(url: str):
+def open_window(url: str) -> bool:
+    """用独立浏览器窗口打开界面；返回是否由本应用拉起了窗口（可用进程监测）。"""
     # 关掉已有的本应用窗口，保证始终只有一个窗口
     close_app_windows()
     _clean_profile_locks()
@@ -155,7 +156,7 @@ def open_window(url: str):
     exe = find_browser()
     if not exe:
         webbrowser.open(url)
-        return
+        return False
 
     EDGE_PROFILE.mkdir(parents=True, exist_ok=True)
     win_w, win_h, _ = window_geometry()
@@ -173,15 +174,17 @@ def open_window(url: str):
     # 注意：这里不能用 CREATE_NO_WINDOW，否则 Edge 窗口不会显示
     _launch_browser(args)
     if _wait_app_window(8.0):
-        return
+        return True
     # 第一次没出现窗口（通常是旧进程还没退干净），清掉重来一次
     close_app_windows()
     _clean_profile_locks()
     _launch_browser(args)
     if _wait_app_window(8.0):
-        return
+        return True
     if not _profile_pids():
         webbrowser.open(url)
+        return False
+    return True
 
 
 def _launch_browser(args) -> bool:
@@ -197,7 +200,7 @@ def _launch_browser(args) -> bool:
 
 
 def _has_app_window() -> bool:
-    """是否已有本应用窗口（浏览器主进程存在）。"""
+    """是否已有本应用窗口（浏览器主进程存在）；无法判断时返回 None。"""
     if os.name != "nt":
         return False
     marker = str(EDGE_PROFILE)
@@ -207,7 +210,28 @@ def _has_app_window() -> bool:
         "$_.CommandLine -notlike '*--type=*' }} | "
         "Select-Object -First 1 -ExpandProperty ProcessId"
     )
-    return bool([line for line in _run_ps(ps).splitlines() if line.strip().isdigit()])
+    out = _run_ps(ps)
+    if out is None:
+        return None
+    return bool([line for line in out.splitlines() if line.strip().isdigit()])
+
+
+def watch_browser_window(app):
+    """浏览器兜底模式：窗口被关掉后退出应用，避免主进程和 Ollama 残留。"""
+    missing = 0
+    while not app.quit_event.wait(3.0):
+        alive = _has_app_window()
+        if alive is None:
+            # 查询失败不当作窗口已关闭
+            continue
+        if alive:
+            missing = 0
+            continue
+        missing += 1
+        if missing >= 2:
+            logging.info("应用窗口已关闭，正在退出")
+            app.quit_event.set()
+            return
 
 
 def _wait_app_window(timeout: float) -> bool:
@@ -230,20 +254,22 @@ def _profile_pids():
         f"Where-Object {{ $_.CommandLine -like '*{marker}*' }} | "
         "Select-Object -ExpandProperty ProcessId"
     )
-    return [line.strip() for line in _run_ps(ps).splitlines() if line.strip().isdigit()]
+    out = _run_ps(ps) or ""
+    return [line.strip() for line in out.splitlines() if line.strip().isdigit()]
 
 
-def _run_ps(script: str) -> str:
-    """执行 PowerShell 并返回输出（中文系统输出可能是 GBK，按 UTF-8 宽松解码）。"""
+def _run_ps(script: str, timeout: float = 20):
+    """执行 PowerShell 并返回输出；超时或失败返回 None（中文系统按 UTF-8 宽松解码）。"""
     try:
         r = subprocess.run(
             ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
+            timeout=timeout,
             creationflags=0x08000000,
         )
         return (r.stdout or b"").decode("utf-8", "ignore")
     except Exception:
-        return ""
+        return None
 
 
 def _clean_profile_locks():
@@ -442,6 +468,8 @@ def run_desktop(app, manager, port: int, url: str) -> bool:
 
     try:
         webview.start(gui="edgechromium" if os.name == "nt" else None)
+        # 窗口关闭后 GUI 循环结束；无论 closed 事件是否触发都标记退出
+        app.quit_event.set()
         return True
     except Exception:
         logging.warning("原生窗口启动失败，回退到浏览器窗口", exc_info=True)
@@ -489,7 +517,11 @@ def main():
         ensure_webview2()
         native = run_desktop(app, manager, port, url)
         if not native:
-            open_window(url)
+            if open_window(url):
+                # 浏览器兜底模式下没有窗口关闭事件，靠进程监测退出应用
+                threading.Thread(
+                    target=watch_browser_window, args=(app,), daemon=True
+                ).start()
 
     try:
         while not app.quit_event.is_set():
@@ -499,9 +531,18 @@ def main():
     finally:
         logging.info("应用退出，正在释放显存并停止服务")
         app.window = None
-        manager.shutdown()
-        server.shutdown()
+        try:
+            manager.shutdown()
+        except Exception:
+            logging.exception("停止 Ollama 服务失败")
+        try:
+            server.shutdown()
+        except Exception:
+            logging.exception("停止本地服务失败")
         logging.info("已退出")
+        logging.shutdown()
+        # 强杀残留的非守护线程（如 GUI 库内部线程），保证进程真正退出
+        os._exit(0)
 
 
 if __name__ == "__main__":

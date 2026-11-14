@@ -785,7 +785,10 @@ class OllamaManager:
         raise RuntimeError(self.last_error)
 
     def stop(self):
-        with self._lock:
+        # 关闭窗口时可能正有 start() 在等 Ollama 就绪并持有锁：最多等 20 秒，
+        # 超时也必须继续强杀，否则退出后 Ollama 会一直占用显存
+        got = self._lock.acquire(timeout=20)
+        try:
             # 停止前先卸载所有已加载模型，确保显存被释放
             if bool(self.cfg.get("releaseOnStop")):
                 try:
@@ -822,13 +825,19 @@ class OllamaManager:
             if self._healthy():
                 pid = _pid_on_port(self.port)
                 if pid and _process_name(pid).lower().startswith("ollama"):
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(pid)],
-                        capture_output=True,
-                        timeout=20,
-                        creationflags=CREATE_NO_WINDOW,
-                    )
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True,
+                            timeout=20,
+                            creationflags=CREATE_NO_WINDOW,
+                        )
+                    except Exception:
+                        pass
                     time.sleep(1)
+        finally:
+            if got:
+                self._lock.release()
             # 最后再清理本应用运行时目录下所有 ollama 进程（含模型 runner）
             self._kill_ours()
 
