@@ -94,6 +94,15 @@ def fmt_speed(num) -> str:
     return fmt_size(num) + "/s"
 
 
+def parse_size(text) -> int:
+    """把「4.7 GB」这类描述转成字节数，用于下载前估算磁盘空间。"""
+    match = re.match(r"\s*([\d.]+)\s*(TB|GB|MB|KB)", str(text or ""), re.I)
+    if not match:
+        return 0
+    factor = {"KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    return int(float(match.group(1)) * factor[match.group(2).upper()])
+
+
 def friendly_error(err) -> str:
     """把常见的网络/文件异常转成中文提示。"""
     if isinstance(err, urllib.error.HTTPError):
@@ -1013,6 +1022,11 @@ class OllamaManager:
         gguf = tmp_dir / filename
         # 目录中已有完整文件时直接导入
         download_needed = not gguf.exists() or gguf.stat().st_size == 0
+        if download_needed:
+            # 下载前先确认磁盘空间（下载 + 导入复制，按 2.2 倍预留）
+            need = parse_size(entry.get("size"))
+            if need:
+                self._check_space(int(need * 2.2) + 512 * 1024 * 1024)
         if not download_needed:
             self.hub.publish(
                 "model",
@@ -1054,7 +1068,6 @@ class OllamaManager:
             )
             download_file(url, gguf, on_dl, resume=True)
 
-        self._check_space(gguf.stat().st_size)
         self.hub.publish(
             "model",
             {

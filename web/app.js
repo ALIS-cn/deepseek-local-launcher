@@ -969,10 +969,22 @@ function autoGrow(el) {
 
 /* ===================== 对话流程 ===================== */
 function historyPayload(upTo) {
-  return Chat.messages.slice(0, upTo).map((m) => ({
+  const mapped = Chat.messages.slice(0, upTo).map((m) => ({
     role: m.role,
     content: m.role === "assistant" ? splitThinking(m.content || "").content : m.content,
   })).filter((m) => m.content);
+  // 按上下文长度裁剪历史，避免长对话把 num_ctx 撑爆导致模型报错
+  const numCtx = Number((S.state && S.state.config && S.state.config.numCtx) || 8192);
+  const budget = Math.max(1500, Math.floor(numCtx * 0.75));
+  const out = [];
+  let used = 0;
+  for (let i = mapped.length - 1; i >= 0; i--) {
+    const len = (mapped[i].content || "").length;
+    if (out.length >= 2 && used + len > budget) break;
+    used += len;
+    out.unshift(mapped[i]);
+  }
+  return out;
 }
 
 async function streamReply(history) {

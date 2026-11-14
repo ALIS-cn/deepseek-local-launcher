@@ -369,19 +369,20 @@ def run_desktop(app, manager, port: int, url: str) -> bool:
     def bootstrap():
         _set_splash(app, 20, "正在启动本地服务…")
         _wait_state(port, 6)
-        _set_splash(app, 45, "正在启动 Ollama 服务…")
-        deadline = time.time() + 10
+        # 只等 Ollama 一小会儿，没起来也先进主界面；状态由界面实时显示
+        _set_splash(app, 60, "正在启动 Ollama 服务…")
+        deadline = time.time() + 3
         while time.time() < deadline:
             try:
                 if manager.status().get("serveRunning"):
                     break
             except Exception:
                 pass
-            time.sleep(0.4)
-        _set_splash(app, 78, "正在加载模型列表…")
-        time.sleep(0.2)
+            time.sleep(0.3)
+        _set_splash(app, 92, "正在加载界面…")
+        time.sleep(0.15)
         _set_splash(app, 100, "准备就绪")
-        time.sleep(0.25)
+        time.sleep(0.2)
         try:
             window.load_url(url)
         except Exception:

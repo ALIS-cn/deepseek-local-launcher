@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """应用配置读写"""
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -58,9 +59,12 @@ class Config:
 
     def save(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(
+        # 先写临时文件再替换，避免中途崩溃/断电把配置写坏
+        tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
+        tmp.write_text(
             json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        os.replace(tmp, CONFIG_FILE)
 
     def get(self, key, default=None):
         return self.data.get(key, default)

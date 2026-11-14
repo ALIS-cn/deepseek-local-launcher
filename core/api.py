@@ -60,7 +60,10 @@ def list_memories(cfg):
 
 
 def read_memory(cfg, name: str) -> str:
-    f = memory_dir(cfg) / name
+    safe = _safe_memory_name(name)
+    if not safe:
+        return ""
+    f = memory_dir(cfg) / safe
     if not f.is_file():
         return ""
     try:
@@ -70,14 +73,19 @@ def read_memory(cfg, name: str) -> str:
 
 
 def write_memory(cfg, name: str, content: str):
+    safe = _safe_memory_name(name)
+    if not safe:
+        return
     d = memory_dir(cfg)
     d.mkdir(parents=True, exist_ok=True)
-    f = d / name
-    f.write_text(content or "", encoding="utf-8")
+    (d / safe).write_text(content or "", encoding="utf-8")
 
 
 def delete_memory(cfg, name: str):
-    f = memory_dir(cfg) / name
+    safe = _safe_memory_name(name)
+    if not safe:
+        return
+    f = memory_dir(cfg) / safe
     if f.is_file():
         try:
             f.unlink()
@@ -325,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, path: str):
         rel = urllib.parse.unquote(path.lstrip("/")) or "index.html"
         target = (WEB_DIR / rel).resolve()
-        if not str(target).startswith(str(WEB_DIR)):
+        if target != WEB_DIR and WEB_DIR not in target.parents:
             return self._fail("非法路径", 403)
         if not target.is_file():
             return self._fail("文件不存在", 404)
@@ -363,9 +371,28 @@ class Handler(BaseHTTPRequestHandler):
             hub.unsubscribe(q)
 
     # ---------- POST ----------
+    def _same_origin(self) -> bool:
+        """只接受本应用页面发起的请求，挡住其它网页的跨站提交。"""
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True  # 非浏览器来源（命令行/本机脚本）
+        try:
+            port = self.server.server_address[1]
+        except Exception:
+            port = 0
+        return origin in (
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        )
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         try:
+            if not self._same_origin():
+                return self._fail("非法请求来源", 403)
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" not in ctype:
+                return self._fail("请求格式不正确", 415)
             if path == "/api/chat":
                 return self._chat()
             body = self._read_json()
