@@ -25,6 +25,7 @@ from .hardware import gpu_summary
 from .ollama import SERVE_LOG, friendly_error
 from .search import build_material, is_chitchat, search_web
 from . import updater
+from . import vram
 
 WEB_DIR = (RESOURCE_DIR / "web").resolve()
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -285,6 +286,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"ok": True, "models": self.app.manager.list_models()}
                 )
+            if path == "/api/vram":
+                return self._send_json({"ok": True, **vram.usage()})
             if path == "/api/fs":
                 return self._fs(query)
             if path == "/api/memories":
@@ -800,10 +803,14 @@ class Handler(BaseHTTPRequestHandler):
             self._start_sse()
             try:
                 if bool(self.app.cfg.get("restartOnSwitch")):
-                    # 切换模型：重启 Ollama，彻底释放上一模型的显存
+                    # 切换模型：先卸载旧模型，再重启 Ollama，彻底释放显存
                     self._sse_event(
                         {"status": "restarting", "message": "正在重启 Ollama 以释放显存…"}
                     )
+                    try:
+                        mgr.unload_all()
+                    except Exception:
+                        pass
                     mgr.restart()
                 else:
                     mgr.ensure_running()

@@ -85,7 +85,8 @@ function tokenHeaders() {
 
 async function api(path, body) {
   const isRead = body === undefined
-    && (path.startsWith("/api/fs") || path === "/api/state" || path === "/api/models");
+    && (path.startsWith("/api/fs") || path === "/api/state"
+      || path === "/api/models" || path === "/api/vram");
   const options = isRead ? {} : {
     method: "POST",
     headers: { "Content-Type": "application/json", ...tokenHeaders() },
@@ -124,11 +125,20 @@ function confirmDialog(title, text) {
 }
 
 /* ===================== 视图切换 ===================== */
+let vramTimer = null;
 function showView(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   if (name === "chat") {
     setTimeout(() => scrollToBottom(), 30);
+  }
+  if (vramTimer) {
+    clearInterval(vramTimer);
+    vramTimer = null;
+  }
+  if (name === "settings") {
+    refreshVram();
+    vramTimer = setInterval(refreshVram, 5000);
   }
 }
 
@@ -242,6 +252,44 @@ function renderHardware() {
     + (fit
       ? `，按显存推荐 <b>${escapeHtml(prettyName(fit.name))}</b>（建议显存 ${escapeHtml(fit.vram)}）`
       : "，显存信息不足，建议从较小的模型开始试");
+}
+
+function fmtBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + " GB";
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
+
+async function refreshVram() {
+  const box = $("#vram-list");
+  if (!box) return;
+  try {
+    const data = await api("/api/vram");
+    const total = Number(data.total) || 0;
+    const used = Number(data.used) || 0;
+    const ours = Number(data.appUsed) || 0;
+    $("#vram-total").textContent = total ? fmtBytes(total) : "—";
+    $("#vram-used").textContent = total
+      ? `${fmtBytes(used)}（${Math.round((used * 100) / total)}%）`
+      : fmtBytes(used);
+    $("#vram-ours").textContent = fmtBytes(ours);
+    const rows = (data.processes || []).slice(0, 10);
+    box.innerHTML = rows.length
+      ? rows.map((p) => {
+        const name = String(p.name || "unknown").replace(/\.exe$/i, "");
+        const tag = p.ours ? '<span class="v-tag">本应用</span>' : "";
+        return `<div class="vram-row${p.ours ? " ours" : ""}">`
+          + `<span class="v-name">${escapeHtml(name)}${tag}`
+          + `<span class="muted"> · PID ${p.pid}</span></span>`
+          + `<span class="v-bytes">${fmtBytes(p.bytes)}</span>`
+          + "</div>";
+      }).join("")
+      : '<div class="muted">暂无进程占用显存</div>';
+  } catch (err) {
+    box.innerHTML = `<div class="muted">读取失败：${escapeHtml(err.message)}</div>`;
+  }
 }
 
 function renderCatalog() {
@@ -1632,6 +1680,7 @@ function bind() {
 
   // 在线更新
   $("#btn-check-update").addEventListener("click", () => checkUpdate(true));
+  $("#btn-refresh-vram").addEventListener("click", refreshVram);
   $("#check-update-toggle").addEventListener("change", async (e) => {
     try {
       await api("/api/config", { checkUpdate: e.target.checked });

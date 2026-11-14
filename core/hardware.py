@@ -91,6 +91,7 @@ def _wmi_names():
     if os.name != "nt":
         return []
     script = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
         "Get-CimInstance Win32_VideoController | "
         "ForEach-Object { $_.Name + '|' + $_.AdapterRAM }"
     )

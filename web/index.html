@@ -341,6 +341,22 @@
       <div class="panel">
         <div class="panel-head">
           <div>
+            <h2>显存占用</h2>
+            <p class="muted">查看是哪个程序在占用显存，以及本应用（含 Ollama）占用了多少</p>
+          </div>
+          <button class="btn small ghost" id="btn-refresh-vram">刷新</button>
+        </div>
+        <div class="kv"><span>显卡总显存</span><b id="vram-total">—</b></div>
+        <div class="kv"><span>已占用</span><b id="vram-used">—</b></div>
+        <div class="kv"><span>本应用占用</span><b id="vram-ours">—</b></div>
+        <div class="vram-list" id="vram-list">
+          <div class="muted">打开本页会自动刷新</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
             <h2>更新</h2>
             <p class="muted">检查 GitHub 上的新版本，安装包走国内加速节点下载</p>
           </div>
@@ -398,7 +414,7 @@
       <div class="panel about">
         <h2>关于</h2>
         <p class="muted">DeepSeek 本地模型启动器 <b>v<span id="app-version">1.0.0</span></b></p>
-        <p class="muted">模型与运行环境均保存在本地。配置与记忆在 <span class="mono">%LOCALAPPDATA%\DeepSeekLauncher\data</span>，Ollama 运行时在同目录的 <span class="mono">runtimes</span> 下，重装应用不会丢失。</p>
+        <p class="muted">模型与运行环境均保存在应用目录下：<span class="mono">data</span> 存配置与记忆，<span class="mono">runtimes</span> 存 Ollama，<span class="mono">models</span> 存模型，可随应用整体移动。</p>
         <div class="row"><button class="btn small ghost danger" id="btn-quit">退出应用</button></div>
       </div>
     </section>

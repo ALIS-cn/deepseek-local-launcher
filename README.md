@@ -34,11 +34,11 @@
 3. 到「下载模型」选择合适的尺寸（按卡片上的建议显存挑选），等待下载与导入完成。
 4. 回到「对话」开始使用。
 
-数据位置：
+数据位置（全部在应用目录下，可整体移动）：
 
-- 配置、日志与记忆：`%LOCALAPPDATA%\DeepSeekLauncher\data`（首次运行会自动从旧安装目录迁移）
-- 模型：默认安装目录下 `models/`（可在设置中修改）
-- Ollama 运行时：`%LOCALAPPDATA%\DeepSeekLauncher\runtimes\ollama-intel`、`ollama-standard`
+- 配置、日志与记忆：`data/`
+- 模型：`models/`（可在设置中修改）
+- Ollama 运行时：`runtimes/ollama-intel`、`runtimes/ollama-standard`
 - 服务端口：面板 `18765`，Ollama `11500`（均只监听 127.0.0.1）
 
 ## 从源码运行

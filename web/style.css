@@ -661,3 +661,16 @@ select option { background: #111a2c; color: var(--text); }
   .composer .send { min-width: 54px; padding: 0 16px; }
   .composer .send span { display: none; }
 }
+
+/* 显存占用 */
+.vram-list { margin-top: 12px; display: flex; flex-direction: column; gap: 7px; }
+.vram-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+.vram-row .v-name { color: #cfd8ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vram-row .v-tag {
+  font-size: 10.5px; color: #7ee2b8; border: 1px solid rgba(126, 226, 184, 0.45);
+  border-radius: 999px; padding: 0 6px; margin-left: 6px;
+}
+.vram-row.ours .v-name { color: #7ee2b8; }
+.vram-row .v-bytes { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vram-bar { height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.vram-bar i { display: block; height: 100%; background: linear-gradient(90deg, #4d6bfe, #38bdf8); }

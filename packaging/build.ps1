@@ -1,8 +1,25 @@
 ﻿# 一键打包：生成 exe（dist\DeepSeekLauncher）与安装包（dist\installer\*.exe）
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+$distApp = "$root\dist\DeepSeekLauncher"
+$backup = "$root\build\dist-backup"
+$keepNames = @('data', 'runtimes', 'models')
 Push-Location $root
+$moved = @()
 try {
+    # 打包前把运行时数据挪到备份目录，避免 PyInstaller 清空 dist 时把配置/Ollama 删掉
+    if (Test-Path $backup) { Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Force -Path $backup | Out-Null
+    if (Test-Path $distApp) {
+        foreach ($name in $keepNames) {
+            $src = Join-Path $distApp $name
+            if (Test-Path $src) {
+                Move-Item $src (Join-Path $backup $name) -Force
+                $moved += $name
+            }
+        }
+    }
+
     Write-Host "==> 生成图标"
     py "$PSScriptRoot\make_icon.py"
 
@@ -28,5 +45,17 @@ try {
     Write-Host "安装包:   $root\dist\installer"
 }
 finally {
+    # 打包完成后把配置、Ollama 运行时、模型放回去
+    if (Test-Path $backup) {
+        foreach ($name in $keepNames) {
+            $src = Join-Path $backup $name
+            if (-not (Test-Path $src)) { continue }
+            $dst = Join-Path $distApp $name
+            if (Test-Path $dst) { Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Force -Path $distApp | Out-Null
+            Move-Item $src $dst -Force
+        }
+        Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
 }

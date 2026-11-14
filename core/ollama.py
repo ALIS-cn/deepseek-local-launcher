@@ -16,20 +16,13 @@ import zipfile
 from pathlib import Path
 
 from .catalog import CATALOG_MAP
-from .config import APP_DIR, Config
+from .config import APP_DIR, LEGACY_ROOT, Config
 
 RUNTIME_DIR = APP_DIR / "runtime"
 
-
-def _shared_root() -> Path:
-    """Ollama 运行时的统一存放目录：放在用户目录下，重装/升级应用不会丢。"""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    return Path(base) / "DeepSeekLauncher"
-
-
-# 每个版本各自一个独立目录，互不覆盖，重装应用后仍能自动找到
-RUNTIME_ROOT = _shared_root() / "runtimes"
-DOWNLOAD_DIR = _shared_root() / "downloads"
+# Ollama 统一放在应用目录下，随应用整体移动；每个版本一个独立子目录
+RUNTIME_ROOT = APP_DIR / "runtimes"
+DOWNLOAD_DIR = RUNTIME_ROOT / "downloads"
 SERVE_LOG = RUNTIME_ROOT / "ollama-serve.log"
 
 MANAGED_DIRS = {
@@ -37,10 +30,14 @@ MANAGED_DIRS = {
     "standard": RUNTIME_ROOT / "ollama-standard",
 }
 
-# 旧版本把 Ollama 解压在应用目录里，继续识别，避免升级后“找不到”
+# 旧版本放在应用 runtime/ 或用户目录里的 Ollama，继续识别，避免“找不到”
 LEGACY_DIRS = {
     "intel": RUNTIME_DIR / "ollama-intel",
     "standard": RUNTIME_DIR / "ollama",
+}
+LEGACY_SHARED_DIRS = {
+    "intel": LEGACY_ROOT / "runtimes" / "ollama-intel",
+    "standard": LEGACY_ROOT / "runtimes" / "ollama-standard",
 }
 
 # Intel 优化版来自 ModelScope（https://www.modelscope.cn/models/intel/ollama）
@@ -504,7 +501,11 @@ class OllamaManager:
             p = Path(cfg_path)
             if p.is_file():
                 out.append((p, self._guess_kind(p)))
-        for kind, folder in list(MANAGED_DIRS.items()) + list(LEGACY_DIRS.items()):
+        for kind, folder in (
+            list(MANAGED_DIRS.items())
+            + list(LEGACY_DIRS.items())
+            + list(LEGACY_SHARED_DIRS.items())
+        ):
             exe = find_exe(folder)
             if exe:
                 out.append((exe, kind))
@@ -733,8 +734,20 @@ class OllamaManager:
                 except Exception:
                     pass
             if self.proc and self.proc.poll() is None:
+                # 连同子进程一起结束（Ollama 会派生 ollama-lib 加载模型）
                 try:
-                    self.proc.terminate()
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
+                        capture_output=True,
+                        timeout=20,
+                        creationflags=CREATE_NO_WINDOW,
+                    )
+                except Exception:
+                    try:
+                        self.proc.terminate()
+                    except Exception:
+                        pass
+                try:
                     self.proc.wait(timeout=8)
                 except Exception:
                     try:
@@ -743,17 +756,69 @@ class OllamaManager:
                         pass
             self.proc = None
             self._loaded_model = ""
-            # 兼容上一次异常退出后残留的 Ollama 进程（同一端口）
+            # 等端口释放；仍有残留时按端口结束进程树
+            deadline = time.time() + 8
+            while time.time() < deadline and self._healthy():
+                time.sleep(0.5)
             if self._healthy():
                 pid = _pid_on_port(self.port)
                 if pid and _process_name(pid).lower().startswith("ollama"):
                     subprocess.run(
-                        ["taskkill", "/PID", str(pid), "/F"],
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
                         capture_output=True,
-                        timeout=15,
+                        timeout=20,
                         creationflags=CREATE_NO_WINDOW,
                     )
                     time.sleep(1)
+            # 最后再清理本应用运行时目录下所有 ollama 进程（含模型 runner）
+            self._kill_ours()
+
+    def _kill_ours(self):
+        """结束本应用目录下残留的 ollama 进程（不影响系统里其它 Ollama）。"""
+        if os.name != "nt":
+            return
+        roots = [
+            str(folder).lower()
+            for folder in (
+                list(MANAGED_DIRS.values())
+                + list(LEGACY_DIRS.values())
+                + list(LEGACY_SHARED_DIRS.values())
+            )
+        ]
+        if self.path:
+            roots.append(str(Path(self.path).parent).lower())
+        script = (
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'ollama*' } | "
+            "ForEach-Object { $_.ProcessId.ToString() + '|' + $_.ExecutablePath }"
+        )
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                timeout=20,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            text = (out.stdout or b"").decode("utf-8", "ignore")
+        except Exception:
+            return
+        for line in text.splitlines():
+            pid_text, _, exe = line.partition("|")
+            pid_text = pid_text.strip()
+            if not pid_text.isdigit():
+                continue
+            exe_low = exe.strip().lower()
+            if not any(exe_low.startswith(root) for root in roots):
+                continue
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", pid_text],
+                    capture_output=True,
+                    timeout=15,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+            except Exception:
+                pass
 
     def restart(self):
         self.stop()
@@ -944,7 +1009,11 @@ class OllamaManager:
     def load_model(self, name: str):
         current = self._loaded_model or self._last_chat_model
         if bool(self.cfg.get("restartOnSwitch")) and current and current != name:
-            # 切换模型：重启服务彻底释放显存，再加载新模型
+            # 切换模型：先卸载旧模型，再重启服务，确保显存真的被释放
+            try:
+                self.unload_all()
+            except Exception:
+                pass
             self.restart()
         else:
             self.ensure_running()
@@ -1125,7 +1194,8 @@ class OllamaManager:
                     "message": "正在连接 ModelScope 国内镜像…",
                 },
             )
-            download_file(url, gguf, on_dl, resume=True)
+            # 多线程分段下载（支持断点/回退单线程），比单连接快很多
+            download_file_fast(url, gguf, on_dl)
 
         # 导入前校验文件完整，避免镜像文件损坏导致 ollama create 失败
         if expected_size and gguf.stat().st_size != expected_size:
