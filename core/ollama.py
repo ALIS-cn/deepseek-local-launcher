@@ -133,6 +133,23 @@ def fmt_speed(num) -> str:
     return fmt_size(num) + "/s"
 
 
+def fmt_eta(seconds) -> str:
+    """把剩余秒数转成「x 分 y 秒」，用于显示下载剩余时间。"""
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return ""
+    if seconds <= 0 or seconds > 86400:
+        return ""
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分"
+    if minutes:
+        return f"{minutes} 分 {secs} 秒"
+    return f"{secs} 秒"
+
+
 def parse_size(text) -> int:
     """把「4.7 GB」这类描述转成字节数，用于下载前估算磁盘空间。"""
     match = re.match(r"\s*([\d.]+)\s*(TB|GB|MB|KB)", str(text or ""), re.I)
@@ -262,47 +279,80 @@ def _probe_size(url: str) -> int:
 
 
 def download_file_fast(url: str, dest: Path, on_progress, connections: int = 8):
-    """优先使用多线程分段下载；服务器不支持时回退单线程。"""
+    """多线程分段下载：支持断点续传与失败分片重试；服务器不支持分段时回退单线程。"""
     total = _probe_size(url)
     if total < 20 * 1024 * 1024:
         download_file(url, dest, on_progress, resume=True)
         return
 
     part = dest.with_name(dest.name + ".part")
+    progress = dest.with_name(dest.name + ".part.json")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if part.exists() and part.stat().st_size == total:
-        os.replace(part, dest)
-        on_progress(total, total, 0)
-        return
-    try:
-        with open(part, "wb") as f:
-            f.truncate(total)
-    except OSError:
-        download_file(url, dest, on_progress, resume=True)
-        return
 
-    chunk = total // connections
     ranges = []
+    chunk = total // connections
     for i in range(connections):
         start = i * chunk
         end = total - 1 if i == connections - 1 else start + chunk - 1
         ranges.append((start, end))
+    lengths = [end - start + 1 for start, end in ranges]
 
+    # 读取上次的分段进度，实现断点续传（避免大模型中断后从头再下）
     done = [0] * connections
-    errors = []
+    resume_ok = False
+    if part.exists() and part.stat().st_size == total and progress.exists():
+        try:
+            saved = json.loads(progress.read_text(encoding="utf-8"))
+            if int(saved.get("total") or 0) == total and len(saved.get("done") or []) == connections:
+                done = [min(int(v), lengths[i]) for i, v in enumerate(saved["done"])]
+                resume_ok = True
+        except Exception:
+            resume_ok = False
+    if not resume_ok:
+        try:
+            with open(part, "wb") as f:
+                f.truncate(total)
+        except OSError:
+            download_file(url, dest, on_progress, resume=True)
+            return
+        done = [0] * connections
+    elif sum(done) >= total:
+        os.replace(part, dest)
+        progress.unlink(missing_ok=True)
+        on_progress(total, total, 0)
+        return
+
     lock = threading.Lock()
     started = time.time()
-    last = [0.0]
+    base_done = sum(done)  # 续传时已下载的部分，不计入本次速度
+    last_pub = [0.0]
+    last_save = [0.0]
+
+    def save_progress():
+        try:
+            payload = {"total": total, "done": list(done)}
+            tmp = progress.with_name(progress.name + ".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(tmp, progress)
+        except Exception:
+            pass
 
     def worker(index, start, end):
+        length = end - start + 1
+        offset = done[index]
+        if offset >= length:
+            return
         try:
             req = urllib.request.Request(
                 url,
-                headers={"Range": f"bytes={start}-{end}", "User-Agent": UA},
+                headers={
+                    "Range": f"bytes={start + offset}-{end}",
+                    "User-Agent": UA,
+                },
             )
             with urllib.request.urlopen(req, timeout=60) as resp, open(part, "r+b") as f:
-                f.seek(start)
-                pos = start
+                f.seek(start + offset)
+                pos = start + offset
                 while pos <= end:
                     data = resp.read(min(262144, end - pos + 1))
                     if not data:
@@ -310,38 +360,47 @@ def download_file_fast(url: str, dest: Path, on_progress, connections: int = 8):
                     f.write(data)
                     pos += len(data)
                     with lock:
-                        done[index] = pos - start
+                        done[index] = min(pos - start, length)
                         loaded = sum(done)
                         now = time.time()
-                        if now - last[0] >= 0.4:
-                            last[0] = now
+                        if now - last_pub[0] >= 0.5:
+                            last_pub[0] = now
+                            moved = max(loaded - base_done, 0)
                             on_progress(
-                                loaded, total, loaded / max(now - started, 0.001)
+                                loaded, total, moved / max(now - started, 0.001)
                             )
+                        if now - last_save[0] >= 2.0:
+                            last_save[0] = now
+                            save_progress()
             if pos <= end:
                 raise RuntimeError("分段数据不完整")
-        except Exception as e:  # noqa: BLE001
-            with lock:
-                errors.append(e)
-
-    threads = [
-        threading.Thread(target=worker, args=(i, s, e), daemon=True)
-        for i, (s, e) in enumerate(ranges)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    if errors or sum(done) < total:
-        try:
-            part.unlink(missing_ok=True)
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # 记录在 done 上即可，未完成的分片会被重试
             pass
-        # 分段失败时回退单线程下载
-        download_file(url, dest, on_progress, resume=False)
-        return
 
+    def run_all():
+        threads = [
+            threading.Thread(target=worker, args=(i, s, e), daemon=True)
+            for i, (s, e) in enumerate(ranges)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    run_all()
+    # 有分片失败时重试一次，避免整包重下
+    if any(done[i] < lengths[i] for i in range(connections)):
+        run_all()
+
+    missing = [i for i in range(connections) if done[i] < lengths[i]]
+    save_progress()
+    if missing:
+        raise RuntimeError(
+            f"下载中断（已完成 {sum(done) * 100 // max(total, 1)}%），重新下载会从断点继续"
+        )
+
+    progress.unlink(missing_ok=True)
     os.replace(part, dest)
     on_progress(total, total, total / max(time.time() - started, 0.001))
 
@@ -1071,6 +1130,9 @@ class OllamaManager:
                 try:
                     self._pull_modelscope(model, entry)
                 except Exception as e:
+                    # 网络中断时保留已下载分片，下次从断点继续，不回退官方源重下
+                    if "下载中断" in str(e):
+                        raise
                     self.hub.publish(
                         "model",
                         {
@@ -1174,6 +1236,7 @@ class OllamaManager:
                     return
                 last[0] = now
                 percent = int(done * 100 / total) if total else 0
+                eta = fmt_eta((total - done) / speed) if speed > 0 and total > done else ""
                 self.hub.publish(
                     "model",
                     {
@@ -1181,7 +1244,8 @@ class OllamaManager:
                         "percent": percent,
                         "model": model,
                         "message": f"ModelScope 国内镜像下载中 {fmt_size(done)} / "
-                                   f"{fmt_size(total)} · {fmt_speed(speed)}",
+                                   f"{fmt_size(total)} · {fmt_speed(speed)}"
+                                   + (f" · 剩余约 {eta}" if eta else ""),
                     },
                 )
 
