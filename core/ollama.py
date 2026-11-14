@@ -955,8 +955,8 @@ class OllamaManager:
                 },
             )
             self.ensure_running()
-            entry = CATALOG_MAP.get(model)
-            if entry:
+            entry = CATALOG_MAP.get(model) or {}
+            if entry.get("repo") and entry.get("file"):
                 try:
                     self._pull_modelscope(model, entry)
                 except Exception as e:
@@ -971,6 +971,16 @@ class OllamaManager:
                     )
                     self._pull_http(model)
             else:
+                if entry:
+                    self.hub.publish(
+                        "model",
+                        {
+                            "status": "pulling",
+                            "percent": 0,
+                            "model": model,
+                            "message": "该模型走 Ollama 官方源，国内下载可能较慢…",
+                        },
+                    )
                 self._pull_http(model)
             self.hub.publish(
                 "model",

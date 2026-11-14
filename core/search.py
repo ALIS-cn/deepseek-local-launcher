@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""联网搜索：通过必应网页结果获取标题与摘要，供本地模型参考"""
+"""联网搜索：多引擎召回 + 实体过滤 + 相关性重排，给本地模型提供可靠资料"""
 import base64
 import html
 import re
@@ -24,28 +24,140 @@ _FILLERS = (
     "介绍一下", "介绍",
 )
 
-# 用户明确要求搜索的说法：命中时一定联网
+# 用户明确要求搜索的说法
 _SEARCH_INTENT = (
     "搜索", "搜一下", "搜下", "查一下", "查下", "帮我查", "帮我搜",
     "联网查", "网上查", "查询一下", "搜搜", "查查",
 )
 
-_DROP_DOMAINS = ("bing.com", "microsoft.com/zh-cn/search", "go.microsoft.com")
+_DROP_DOMAINS = ("bing.com", "microsoft.com/zh-cn/search", "go.microsoft.com", "so.com/link")
+
+# 问句里对检索没帮助的尾巴，去掉后更容易命中实体页
+_QUERY_TAILS = (
+    "举办地", "举办国家", "举办城市", "举办时间", "举办地点", "在哪个国家",
+    "在哪里", "是哪", "是哪个", "价格是多少", "是什么",
+)
+
+# 英文虚词，不作为检索实体
+_LATIN_STOP = {
+    "the", "and", "for", "what", "when", "how", "with", "from", "this", "that",
+    "are", "was", "were", "is", "of", "to", "in", "on", "at", "by", "or", "an",
+}
+
+
+# ---------- 基础文本处理 ----------
+def _clean(text: str) -> str:
+    text = html.unescape(text or "")
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _decode_page(raw: bytes) -> str:
+    head = raw[:3000].decode("ascii", "ignore").lower()
+    match = re.search(r"charset=[\"']?([\w-]+)", head)
+    enc = (match.group(1) if match else "utf-8").lower()
+    if enc in ("gbk", "gb2312", "gb18030"):
+        enc = "gb18030"
+    try:
+        return raw.decode(enc, "ignore")
+    except Exception:
+        return raw.decode("utf-8", "ignore")
 
 
 def _clean_query(query: str) -> str:
     text = (query or "").strip()
     for word in _SEARCH_INTENT + _FILLERS:
         text = text.replace(word, " ")
-    text = re.sub(r"[？?！!。，,；;：:\s]+", " ", text)
+    text = re.sub(r"[？?！!。，,；;：:、\s]+", " ", text)
+    # 中英文/数字之间补空格，搜索引擎分词更准（A380显卡 -> A380 显卡）
+    text = re.sub(r"([A-Za-z0-9])([\u4e00-\u9fff])", r"\1 \2", text)
+    text = re.sub(r"([\u4e00-\u9fff])([A-Za-z0-9])", r"\1 \2", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text or (query or "").strip()
 
 
-def has_search_intent(query: str) -> bool:
-    """用户是否明确要求联网搜索。"""
-    text = query or ""
-    return any(w in text for w in _SEARCH_INTENT)
+def _simplify(text: str) -> str:
+    """把「2026 年世界杯举办地」这类问句压成核心关键词「2026世界杯」。"""
+    text = re.sub(r"(?<=\d)\s*(年|月|日|号)", "", text)
+    for word in _QUERY_TAILS:
+        text = text.replace(word, " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _entities(text: str):
+    """提取产品名/型号等实体（Intel、A380、RTX4090、2026），检索时作为硬条件。"""
+    tokens = re.findall(r"[A-Za-z]+[A-Za-z0-9\-]*|\d{2,}", text or "")
+    out = []
+    for token in tokens:
+        low = token.lower()
+        if low in _LATIN_STOP or len(low) < 2:
+            continue
+        if token not in out:
+            out.append(token)
+    return out[:6]
+
+
+_CATEGORY_WORDS = (
+    "显卡", "主板", "内存", "硬盘", "处理器", "笔记本", "台式机", "手机", "平板",
+    "相机", "镜头", "耳机", "音箱", "手表", "电视", "显示器", "路由器", "游戏",
+    "汽车", "电动车", "打印机", "nas", "cpu", "gpu",
+)
+
+
+def _model_variant(query: str) -> str:
+    """构造以型号为核心的检索词，例如「A380显卡」；型号是最不容易跑偏的关键词。"""
+    models = [e for e in _entities(query) if any(ch.isdigit() for ch in e)]
+    if not models:
+        return ""
+    core = models[-1]
+    text = _clean_query(query)
+    category = next((w for w in _CATEGORY_WORDS if w in text.lower()), "")
+    if category:
+        # 型号 + 类别词，去掉价格/评测等泛词，避免被带偏
+        return core + category
+    # 没有类别词时，至少保留「型号 + 其余实体」，例如 iPhone 17
+    rest = [e for e in _entities(query) if e.lower() != core.lower()]
+    if rest and len(core) >= 2:
+        return " ".join(rest[:1] + [core])
+    return "" if len(core) < 3 else core
+
+
+def _build_queries(query: str):
+    """构造多个检索词；含型号等实体时，丢弃丢失实体的变体，避免越搜越偏。"""
+    cleaned = _clean_query(query)
+    raw = re.sub(r"\s+", " ", (query or "").strip())
+    variants = [cleaned]
+    simple = _simplify(cleaned)
+    if simple and simple not in variants:
+        variants.append(simple)
+    model = _model_variant(query)
+    if model and model not in variants:
+        variants.append(model)
+    if raw and raw not in variants:
+        variants.append(raw)
+
+    entities = _entities(raw)
+    if entities:
+        kept = [v for v in variants if any(e.lower() in v.lower() for e in entities)]
+        variants = kept or [cleaned]
+    return variants[:4]
+
+
+def _grams(text: str):
+    """二元组，用来衡量结果与问题的相关度。"""
+    text = re.sub(r"[\s\W_]+", "", (text or "").lower())
+    if not text:
+        return set()
+    if len(text) == 1:
+        return {text}
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def _relevance(text: str, grams) -> float:
+    if not grams:
+        return 0.0
+    hit = sum(1 for g in grams if g in text)
+    return hit / len(grams)
 
 
 _GREETINGS = (
@@ -65,184 +177,7 @@ def is_chitchat(query: str) -> bool:
     return len(text) <= 2
 
 
-# 问句里对检索没帮助的尾巴，去掉后更容易命中实体页
-_QUERY_TAILS = (
-    "举办地", "举办国家", "举办城市", "举办时间", "举办地点", "在哪个国家",
-    "在哪里", "是哪", "是哪个", "多少钱", "价格是多少", "是什么",
-)
-
-
-def _simplify(text: str) -> str:
-    """把「2026年世界杯举办地」这类问句压成核心关键词「2026世界杯」。"""
-    text = re.sub(r"(?<=\d)(年|月|日|号)", "", text)
-    for word in _QUERY_TAILS:
-        text = text.replace(word, " ")
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _build_queries(query: str):
-    """构造多个检索词：清洗后的关键词、压缩后的核心词、原始问句。"""
-    cleaned = _clean_query(query)
-    out = [cleaned]
-    simple = _simplify(cleaned)
-    if simple and simple not in out:
-        out.append(simple)
-    raw = re.sub(r"\s+", " ", (query or "").strip())
-    if raw and raw not in out:
-        out.append(raw)
-    return out[:3]
-
-
-def _grams(text: str):
-    """把文本切成二元组，用来衡量搜索结果与问题的相关度。"""
-    text = re.sub(r"[\s\W_]+", "", (text or "").lower())
-    if not text:
-        return set()
-    if len(text) == 1:
-        return {text}
-    return {text[i:i + 2] for i in range(len(text) - 1)}
-
-
-def _relevance(text: str, grams) -> float:
-    if not grams:
-        return 0.0
-    hit = sum(1 for g in grams if g in text)
-    return hit / len(grams)
-
-
-def _score_set(items, grams) -> float:
-    """用前三条结果的平均相关度衡量这组结果好不好。"""
-    if not items:
-        return 0.0
-    scores = sorted(
-        (
-            _relevance(f"{it.get('title') or ''} {it.get('snippet') or ''}", grams)
-            for it in items[:5]
-        ),
-        reverse=True,
-    )
-    return sum(scores[:3]) / min(3, len(scores))
-
-
-def _fetch_results(q: str, limit: int, timeout: int):
-    for base in ("https://cn.bing.com/search", "https://www.bing.com/search"):
-        try:
-            found = _bing_html(f"{base}?q={urllib.parse.quote(q)}&mkt=zh-CN", limit, timeout)
-        except Exception:
-            found = []
-        if found:
-            return found
-    for base in ("https://cn.bing.com/search", "https://www.bing.com/search"):
-        try:
-            found = _bing_rss(f"{base}?format=rss&q={urllib.parse.quote(q)}", limit, timeout)
-        except Exception:
-            found = []
-        if found:
-            return found
-    return []
-
-
-def search_web(query: str, limit: int = 5, timeout: int = 12):
-    query = (query or "").strip()
-    if not query:
-        return []
-    key = query[:120]
-    cached = _cache.get(key)
-    if cached and time.time() - cached[0] < _CACHE_TTL:
-        return cached[1]
-
-    grams = _grams(_simplify(_clean_query(query))) or _grams(query)
-    best = []
-    best_score = 0.0
-    # 依次试不同检索词，取相关度最高的一组结果
-    for q in _build_queries(query):
-        found = _fetch_results(q, limit, timeout)
-        score = _score_set(found, grams)
-        if found and (not best or score > best_score):
-            best, best_score = found, score
-        if best_score >= 0.55:
-            break
-
-    results = _prepare(best, grams, limit)
-    if results:
-        _cache[key] = (time.time(), results)
-    return results
-
-
-def _prepare(results, grams, limit: int):
-    """过滤广告/重复结果，按与问题的相关度排序，并补充前两条网页正文摘录。"""
-    cleaned = []
-    seen = set()
-    for item in results:
-        url = item.get("url") or ""
-        if any(d in url for d in _DROP_DOMAINS):
-            continue
-        host = urllib.parse.urlparse(url).netloc.lower()
-        title = item.get("title") or ""
-        sig = (host, re.sub(r"[\s\W_]+", "", title)[:30])
-        if sig in seen:
-            continue
-        seen.add(sig)
-        snippet = item.get("snippet") or ""
-        # 标题命中比摘要命中更能说明相关
-        score = _relevance(title, grams) * 2 + _relevance(snippet, grams)
-        cleaned.append((score, item))
-
-    if not cleaned:
-        return []
-    cleaned.sort(key=lambda x: x[0], reverse=True)
-    top = cleaned[0][0]
-    # 只保留与最相关结果接近的条目，避免把无关内容塞给模型
-    picked = [item for score, item in cleaned if score >= top * 0.6][:limit]
-    if len(picked) < 2:
-        picked = [item for _, item in cleaned[:limit]]
-
-    # 并行抓取前两条网页正文，补充更具体的信息
-    def _fill(item):
-        try:
-            item["excerpt"] = _fetch_excerpt(item.get("url") or "")
-        except Exception:
-            item["excerpt"] = ""
-
-    threads = [threading.Thread(target=_fill, args=(it,), daemon=True) for it in picked[:2]]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=7)
-    return picked
-
-
-_TAG_RE = re.compile(r"<(script|style|noscript)[^>]*>.*?</\1>", re.S | re.I)
-
-
-def _fetch_excerpt(url: str, timeout: int = 6) -> str:
-    """抓取网页正文前若干字，失败返回空串。"""
-    if not url.startswith("http"):
-        return ""
-    try:
-        raw = _fetch(url, timeout)
-    except Exception:
-        return ""
-    try:
-        text = raw.decode("utf-8", "ignore")
-    except Exception:
-        return ""
-    charset = re.search(r"charset=[\"']?([\w-]+)", text[:2000], re.I)
-    if charset and charset.group(1).lower() in ("gbk", "gb2312", "gb18030"):
-        try:
-            text = raw.decode("gb18030", "ignore")
-        except Exception:
-            pass
-    text = _TAG_RE.sub(" ", text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) < 80:
-        return ""
-    # 去掉导航/页脚常见噪声：取正文中段
-    return text[:900]
-
-
+# ---------- 网络请求 ----------
 def _fetch(url: str, timeout: int) -> bytes:
     req = urllib.request.Request(
         url,
@@ -256,6 +191,7 @@ def _fetch(url: str, timeout: int) -> bytes:
         return resp.read()
 
 
+# ---------- 必应 ----------
 def _decode_link(link: str) -> str:
     """解开必应跳转链接（/ck/a?...&u=a1<base64>）。"""
     if "bing.com/ck/a" not in link:
@@ -280,14 +216,14 @@ _P_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.S)
 
 
 def _bing_html(url: str, limit: int, timeout: int):
-    data = _fetch(url, timeout).decode("utf-8", "ignore")
+    data = _decode_page(_fetch(url, timeout))
     items = []
     for block in _BLOCK_RE.findall(data):
-        m = _TITLE_RE.search(block)
-        if not m:
+        match = _TITLE_RE.search(block)
+        if not match:
             continue
-        title = _clean(m.group(2))
-        link = _decode_link(html.unescape(m.group(1)).strip())
+        title = _clean(match.group(2))
+        link = _decode_link(html.unescape(match.group(1)).strip())
         if not title or not link.startswith("http"):
             continue
         snippet = ""
@@ -320,49 +256,229 @@ def _bing_rss(url: str, limit: int, timeout: int):
     return items
 
 
-def _clean(text: str) -> str:
+def _bing_search(query: str, limit: int, timeout: int):
+    for base in ("https://cn.bing.com/search", "https://www.bing.com/search"):
+        try:
+            items = _bing_html(
+                f"{base}?q={urllib.parse.quote(query)}&mkt=zh-CN", limit, timeout
+            )
+        except Exception:
+            items = []
+        if items:
+            return items
+    for base in ("https://cn.bing.com/search", "https://www.bing.com/search"):
+        try:
+            items = _bing_rss(
+                f"{base}?format=rss&q={urllib.parse.quote(query)}", limit, timeout
+            )
+        except Exception:
+            items = []
+        if items:
+            return items
+    return []
+
+
+# ---------- 360 搜索 ----------
+_SO_BLOCK_RE = re.compile(r'<li class="res-list".*?</li>', re.S)
+_SO_TITLE_RE = re.compile(
+    r'<h3 class="res-title[^"]*"[^>]*>\s*<a([^>]*)>(.*?)</a>', re.S
+)
+_SO_DESC_RE = re.compile(r'<p class="res-desc"[^>]*>(.*?)</p>', re.S)
+
+
+def _so_search(query: str, limit: int, timeout: int):
+    url = "https://www.so.com/s?q=" + urllib.parse.quote(query)
+    data = _decode_page(_fetch(url, timeout))
+    items = []
+    for block in _SO_BLOCK_RE.findall(data):
+        match = _SO_TITLE_RE.search(block)
+        if not match:
+            continue
+        attrs, raw_title = match.group(1), match.group(2)
+        md = re.search(r'data-mdurl="([^"]+)"', attrs)
+        href = re.search(r'href="([^"]+)"', attrs)
+        link = html.unescape((md.group(1) if md else (href.group(1) if href else ""))).strip()
+        if not link.startswith("http") or "so.com/link" in link:
+            continue
+        title = _clean(raw_title)
+        if not title:
+            continue
+        desc = _SO_DESC_RE.search(block)
+        snippet = _clean(desc.group(1)) if desc else ""
+        items.append({"title": title[:120], "url": link, "snippet": snippet[:300]})
+        if len(items) >= limit:
+            break
+    return items
+
+
+# ---------- 多引擎并行召回 ----------
+_ENGINES = (("bing", _bing_search), ("360", _so_search))
+
+
+def _multi_search(query: str, limit: int, timeout: int):
+    items = []
+    lock = threading.Lock()
+
+    def run(name, func):
+        try:
+            found = func(query, limit, timeout)
+        except Exception:
+            found = []
+        with lock:
+            for item in found:
+                item = dict(item)
+                item["engine"] = name
+                items.append(item)
+
+    threads = [
+        threading.Thread(target=run, args=(name, func), daemon=True)
+        for name, func in _ENGINES
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=timeout)
+    return items
+
+
+def _merge(items):
+    """按 URL 去重，同一结果被多个引擎返回时加分。"""
+    merged = {}
+    for item in items:
+        url = (item.get("url") or "").strip()
+        if not url.startswith("http"):
+            continue
+        key = url.split("#")[0].rstrip("/")
+        engines = item.get("engine") or ""
+        current = merged.get(key)
+        if current:
+            for name in engines.split(","):
+                if name and name not in current["engines"].split(","):
+                    current["engines"] += "," + name
+            if len(item.get("snippet") or "") > len(current.get("snippet") or ""):
+                current["snippet"] = item["snippet"]
+        else:
+            merged[key] = {
+                "title": item.get("title") or "",
+                "url": url,
+                "snippet": item.get("snippet") or "",
+                "engines": engines,
+            }
+    return list(merged.values())
+
+
+def _rank(items, grams, entities):
+    """实体硬过滤 + 标题/摘要相关度打分 + 多引擎一致加成。"""
+    # 有带数字的型号（A380、17、4090）时优先按型号过滤，避免搜到同名大类首页
+    model_tokens = [e for e in entities if any(ch.isdigit() for ch in e)]
+    required = model_tokens or entities
+    scored = []
+    for item in items:
+        title = item.get("title") or ""
+        snippet = item.get("snippet") or ""
+        text = f"{title} {snippet}".lower()
+        if required and not any(e.lower() in text for e in required):
+            # 结果里连型号/产品名都没有，几乎肯定跑题
+            continue
+        agreement = max(0, len([e for e in (item.get("engines") or "").split(",") if e]) - 1)
+        score = (
+            _relevance(title, grams) * 2
+            + _relevance(snippet, grams)
+            + 0.12 * agreement
+        )
+        scored.append((score, item))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored
+
+
+# ---------- 对外接口 ----------
+_TAG_RE = re.compile(r"<(script|style|noscript)[^>]*>.*?</\1>", re.S | re.I)
+
+
+def _fetch_excerpt(url: str, timeout: int = 6) -> str:
+    """抓取网页正文前若干字，失败返回空串。"""
+    if not url.startswith("http"):
+        return ""
+    try:
+        raw = _fetch(url, timeout)
+    except Exception:
+        return ""
+    text = _decode_page(raw)
+    text = _TAG_RE.sub(" ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
     text = html.unescape(text)
-    text = re.sub(r"<[^>]+>", "", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) < 80:
+        return ""
+    return text[:900]
 
 
-# 需要联网才能答准的关键词：时效性、实时数据、具体事实查询
-_AUTO_KEYWORDS = (
-    "今天", "现在", "当前", "目前", "最新", "最近", "新闻", "消息", "热点",
-    "价格", "多少钱", "股价", "汇率", "金价", "油价", "房价", "天气", "气温",
-    "比分", "赛况", "赛程", "排行", "排名", "票房", "销量", "市值", "发布",
-    "上市", "今年", "去年", "明年", "几月", "几号", "星期几", "日期", "时间",
-    "谁", "什么时候", "哪一年", "哪里", "在哪", "多少", "是否", "有没有",
-    "最新版本", "官网", "下载",
-    "today", "now", "latest", "news", "price", "weather", "who", "when",
-    "release", "version",
-)
+def _prepare(scored, limit: int):
+    """取与最相关结果接近的条目，并补充前两条网页正文摘录。"""
+    if not scored:
+        return []
+    top = scored[0][0]
+    picked = [item for score, item in scored if score >= max(0.25, top * 0.55)][:limit]
+    if len(picked) < 2:
+        picked = [item for _, item in scored[:limit]]
+    picked = [dict(item) for item in picked]
+
+    def fill(item):
+        try:
+            item["excerpt"] = _fetch_excerpt(item.get("url") or "")
+        except Exception:
+            item["excerpt"] = ""
+
+    threads = [
+        threading.Thread(target=fill, args=(item,), daemon=True)
+        for item in picked[:2]
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=7)
+    return picked
 
 
-_PURE_DATE_RE = re.compile(
-    r"^(请问)?\s*(现在|今天)?\s*(是)?\s*(几号|几月几号|星期几|礼拜几|几点|多少号|什么日子|什么日期|什么时间)"
-)
+def search_web(query: str, limit: int = 5, timeout: int = 12):
+    query = (query or "").strip()
+    if not query:
+        return []
+    key = query[:120]
+    cached = _cache.get(key)
+    if cached and time.time() - cached[0] < _CACHE_TTL:
+        return cached[1]
 
+    grams = _grams(_simplify(_clean_query(query))) or _grams(query)
+    entities = _entities(query)
+    best = []
+    pool = []
+    for variant in _build_queries(query):
+        scored = _rank(_merge(_multi_search(variant, limit, timeout)), grams, entities)
+        pool.extend(scored)
+        if scored and (not best or scored[0][0] > best[0][0]):
+            best = scored
+        # 只有标题几乎完全命中才提前结束，否则继续换检索词再试
+        if best and best[0][0] >= 1.8:
+            break
 
-def should_search(query: str) -> bool:
-    """判断问题是否值得先联网检索（启发式，尽量覆盖时效性问题）。"""
-    text = (query or "").strip()
-    if not text:
-        return False
-    if len(text) > 200:
-        return False
-    # 纯问日期/时间的问题，直接用注入的当前时间回答，不必联网
-    if _PURE_DATE_RE.search(text) and not any(
-        k in text for k in ("天气", "新闻", "股价", "赛事", "节日", "放假", "农历")
-    ):
-        return False
-    low = text.lower()
-    if any(k in low for k in _AUTO_KEYWORDS):
-        return True
-    # 含 4 位年份（如 2025/2026）通常涉及时效信息
-    if re.search(r"(19|20)\d{2}", text):
-        return True
-    return False
+    # 最合适的检索词结果太少时，把其它检索词的结果也合进来补充
+    if len(best) < 2 and pool:
+        pool.sort(key=lambda pair: pair[0], reverse=True)
+        seen = set()
+        merged = []
+        for score, item in pool:
+            key = (item.get("url") or "").split("#")[0].rstrip("/")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append((score, item))
+        best = merged
+
+    results = _prepare(best, limit)
+    if results:
+        _cache[key] = (time.time(), results)
+    return results
 
 
 def build_material(results) -> str:

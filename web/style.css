@@ -301,6 +301,12 @@ select option { background: #111a2c; color: var(--text); }
 .catalog-card .c-note { font-size: 12.5px; color: var(--muted); margin-top: 7px; line-height: 1.55; min-height: 38px; }
 .catalog-card .c-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
 .catalog-card .c-size { font-size: 13px; color: #a9b6d6; font-weight: 600; }
+.catalog-card .c-left { display: flex; align-items: center; gap: 6px; }
+.catalog-card .c-src {
+  font-size: 10.5px; color: var(--muted);
+  padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--line-strong);
+}
 .catalog-card .c-req { display: flex; align-items: center; gap: 8px; }
 .catalog-card .c-vram {
   font-size: 11.5px; color: #9db4ff; font-weight: 600;

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""DeepSeek 模型目录（ModelScope 国内镜像 + Ollama 官方）"""
+"""模型目录：DeepSeek 走 ModelScope 国内镜像，其它热门模型走 Ollama 官方源"""
 
 CATALOG = [
     {
@@ -55,6 +55,63 @@ CATALOG = [
         "note": "旗舰尺寸，需要大内存或高端显卡",
         "repo": "unsloth/DeepSeek-R1-Distill-Llama-70B-GGUF",
         "file": "DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf",
+    },
+    # ---- 以下模型从 Ollama 官方源下载（无国内镜像，速度取决于网络）----
+    {
+        "name": "qwen3:4b",
+        "size": "2.6 GB",
+        "vram": "4 GB",
+        "ram": "8 GB",
+        "note": "通义千问 3 轻量版，中文与代码表现均衡",
+    },
+    {
+        "name": "qwen3:8b",
+        "size": "5.2 GB",
+        "vram": "8 GB",
+        "ram": "16 GB",
+        "note": "通义千问 3，中文通用能力很强，日常首选",
+    },
+    {
+        "name": "qwen3:14b",
+        "size": "9.3 GB",
+        "vram": "12 GB",
+        "ram": "24 GB",
+        "note": "通义千问 3 进阶尺寸，复杂任务更稳",
+    },
+    {
+        "name": "qwen2.5-coder:7b",
+        "size": "4.7 GB",
+        "vram": "8 GB",
+        "ram": "16 GB",
+        "note": "专攻代码补全、解释与生成",
+    },
+    {
+        "name": "llama3.1:8b",
+        "size": "4.7 GB",
+        "vram": "8 GB",
+        "ram": "16 GB",
+        "note": "Meta Llama 3.1，英文与通用对话",
+    },
+    {
+        "name": "gemma3:4b",
+        "size": "3.3 GB",
+        "vram": "6 GB",
+        "ram": "8 GB",
+        "note": "Google Gemma 3，小体积多语言",
+    },
+    {
+        "name": "glm4:9b",
+        "size": "5.5 GB",
+        "vram": "8 GB",
+        "ram": "16 GB",
+        "note": "智谱 GLM-4，中文问答与写作",
+    },
+    {
+        "name": "phi4:14b",
+        "size": "9.1 GB",
+        "vram": "12 GB",
+        "ram": "24 GB",
+        "note": "微软 Phi-4，数理推理突出",
     },
 ]
 

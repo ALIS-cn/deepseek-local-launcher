@@ -746,6 +746,11 @@ class Handler(BaseHTTPRequestHandler):
                 "必须优先使用这些资料回答，并在末尾用「参考：[编号]」标注；"
                 "只回答一次，不要重复输出。"
             )
+        elif query and want_web and not is_chitchat(query):
+            system_parts.append(
+                "本轮联网检索没有找到可靠资料。涉及实时信息、具体价格/参数/新闻的问题，"
+                "请直接说明「没有检索到可靠资料」，不要凭记忆编造具体数据。"
+            )
         if system_parts:
             messages = [{"role": "system", "content": "\n\n".join(system_parts)}] + messages
 

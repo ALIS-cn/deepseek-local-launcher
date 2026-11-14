@@ -218,7 +218,10 @@ function renderCatalog() {
       <div class="c-name">${escapeHtml(m.name)}</div>
       <div class="c-note">${escapeHtml(m.note || "")}</div>
       <div class="c-foot">
-        <span class="c-size">${escapeHtml(m.size || "")}</span>
+        <span class="c-left">
+          <span class="c-size">${escapeHtml(m.size || "")}</span>
+          <span class="c-src">${m.repo ? "国内镜像" : "官方源"}</span>
+        </span>
         <span class="c-req">
           <span class="c-vram">建议显存 ${escapeHtml(m.vram || "—")}</span>
           <span class="c-ram">内存 ${escapeHtml(m.ram || "8 GB")}</span>
